@@ -5,7 +5,7 @@ of this repository, please tell us before you make it public.
 
 ## Reporting
 
-Write to **support@anynear.app**, in English or German. Describe what you observed and how it can be reproduced.
+Write to **security@anynear.app**, in English or German. Describe what you observed and how it can be reproduced.
 Please do not include other people's data, invitation links or backup files, and do not open a public issue for a
 vulnerability.
 

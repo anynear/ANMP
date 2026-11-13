@@ -13,8 +13,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # :core uses the ANDP Kotlin client by composite build from ../../ANDP/kotlin, so CI checks out ANDP next to ANMP.
 # While the repositories are private this needs a short-lived token of the organisation's GitHub App (secrets

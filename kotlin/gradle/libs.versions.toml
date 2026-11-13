@@ -1,0 +1,27 @@
+# Same versions as the App (gradle/libs.versions.toml there).
+[versions]
+kotlin        = "2.4.10"
+agp           = "9.4.1"
+androidMinSdk = "26"
+androidCompileSdk = "37"
+coroutines    = "1.11.0"
+serialization = "1.11.0"
+cryptography  = "0.6.0"
+bouncycastle  = "1.85"
+ktor          = "3.5.2"
+
+[libraries]
+serialization-cbor            = { module = "org.jetbrains.kotlinx:kotlinx-serialization-cbor", version.ref = "serialization" }
+serialization-json            = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+coroutines-core               = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+coroutines-test               = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
+cryptography-core             = { module = "dev.whyoleg.cryptography:cryptography-core", version.ref = "cryptography" }
+cryptography-provider-jdk     = { module = "dev.whyoleg.cryptography:cryptography-provider-jdk", version.ref = "cryptography" }
+cryptography-provider-optimal = { module = "dev.whyoleg.cryptography:cryptography-provider-optimal", version.ref = "cryptography" }
+ktor-client-mock              = { module = "io.ktor:ktor-client-mock", version.ref = "ktor" }
+bouncycastle                  = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bouncycastle" }
+
+[plugins]
+kotlinMultiplatform               = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+androidKotlinMultiplatformLibrary = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
+kotlinSerialization               = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

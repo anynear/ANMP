@@ -1,0 +1,109 @@
+# Checks for every pull request and every push to main. main is protected: changes only via pull
+# request, and the jobs test and ios are required checks. There is no deployment; apps, web and relay
+# consume this repository as source (composite build).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# :core uses the ANDP Kotlin client by composite build from ../../ANDP/kotlin, so CI checks out ANDP next to ANMP.
+# While the repositories are private this needs a short-lived token of the organisation's GitHub App (secrets
+# CI_APP_ID and CI_APP_KEY); once they are public the workflow token is enough.
+#
+# Runners: GitHub's runners, unless the repository variables RUNNER_LINUX or RUNNER_MAC name others (a JSON label list).
+# Only the project's working repository sets them; this repository never runs on machines of the project.
+jobs:
+  test:
+    runs-on: ${{ fromJSON(vars.RUNNER_LINUX || '"ubuntu-latest"') }}
+    defaults:
+      run:
+        working-directory: ANMP/kotlin
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: ANMP
+      - uses: actions/create-github-app-token@v2
+        id: ci-token
+        if: github.event.repository.private
+        with:
+          app-id: ${{ secrets.CI_APP_ID }}
+          private-key: ${{ secrets.CI_APP_KEY }}
+          repositories: ${{ vars.ANDP_REPO || 'ANDP' }}
+          permission-contents: read
+      - uses: actions/checkout@v5
+        with:
+          repository: anynear/${{ vars.ANDP_REPO || 'ANDP' }}
+          token: ${{ steps.ci-token.outputs.token || github.token }}
+          path: ANDP
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v5
+      - name: JVM, JS (Node) and Android host tests
+        run: ./gradlew :format:jvmTest :format:jsNodeTest :format:testAndroidHostTest :core:jvmTest :core:jsNodeTest :core:testAndroidHostTest --console=plain
+      - uses: actions/upload-artifact@v5
+        if: failure()
+        with:
+          name: test-reports
+          path: |
+            ANMP/kotlin/format/build/reports/tests
+            ANMP/kotlin/core/build/reports/tests
+
+  # Go module github.com/anynear/ANMP/go: the same vectors as Kotlin, no ANDP checkout needed.
+  go:
+    runs-on: ${{ fromJSON(vars.RUNNER_LINUX || '"ubuntu-latest"') }}
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - run: go test -count=1 ./...
+
+  ios:
+    # Job name stays "ios" (required check).
+    runs-on: ${{ fromJSON(vars.RUNNER_MAC || '"macos-latest"') }}
+    defaults:
+      run:
+        working-directory: ANMP/kotlin
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: ANMP
+      - uses: actions/create-github-app-token@v2
+        id: ci-token
+        if: github.event.repository.private
+        with:
+          app-id: ${{ secrets.CI_APP_ID }}
+          private-key: ${{ secrets.CI_APP_KEY }}
+          repositories: ${{ vars.ANDP_REPO || 'ANDP' }}
+          permission-contents: read
+      - uses: actions/checkout@v5
+        with:
+          repository: anynear/${{ vars.ANDP_REPO || 'ANDP' }}
+          token: ${{ steps.ci-token.outputs.token || github.token }}
+          path: ANDP
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v5
+      - name: Compile iOS
+        run: ./gradlew :format:compileKotlinIosArm64 :format:compileKotlinIosX64 :core:compileKotlinIosArm64 :core:compileKotlinIosX64 :format:iosSimulatorArm64Test :core:iosSimulatorArm64Test --console=plain

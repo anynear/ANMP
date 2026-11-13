@@ -1,0 +1,258 @@
+; ANMP – anynear Message Protocol, version v1 (ADR 0021, 0034, 0035 §11)
+;
+; One format for every path (internet, radio, future ones). A packet is:
+;
+;   41 4E 01            ; "AN", version v1
+;   packet              ; CBOR, definite lengths
+;
+; Keys are small integers. Unknown keys in header and content are skipped, packets with an unknown
+; `kind` are dropped. Prose: spec/anmp.md. Implementation: kotlin/format (app.anynear.anmp).
+; Test vectors: vectors/anmp-v1.json.
+;
+; Over radio, packets carry only what the radio rule allows (ADR 0015): text, reactions, read receipts,
+; without sender data (the receiver knows the sender by its tag). Over the internet every packet is
+; signed and carries the full sender.
+
+packet = [
+  h: bstr .cbor header,     ; in clear (over radio the channel key protects it, see spec/anmp.md)
+  b: bstr,                  ; nonce(12) || AES-256-GCM(inner) || tag(16), AAD see below
+]
+
+inner = [
+  c: bstr .cbor content,
+  ? s: bstr .size 64,       ; Ed25519 signature of the sender; inside the ciphertext so nobody without
+                            ; the key can test contents against it
+]
+
+; Opened packet, e.g. in the history for new members (ADR 0014): verifiable without decryption.
+opened = [ h: bstr .cbor header, c: bstr .cbor content, ? s: bstr .size 64 ]
+
+header = {
+  0 => kind,
+  1 => tag,                 ; sender: app installation
+  ? 2 => tag,               ; recipient: direct over the internet; pickup (first 8 bytes of the patron key)
+  ? 3 => uint,              ; circle key epoch: circle over radio only
+  ? 4 => bstr .size 32,     ; sender X25519 key: direct over the internet; one-time key in patron and pickup
+  ? 5 => device,            ; sender device ID: likewise, for the device pair key
+  ? 6 => tag,               ; route tag: radio only, public form (ADR 0051); then 1 is the sender tag
+  ? 7 => uint,              ; since (Unix seconds): ask only
+  ? 8 => [* bstr .size 6],  ; reserved, never sent by v1 (formerly shortened route tags of an ask); parsed, at most 8
+  ? 9 => uint,              ; packets the patron holds: patron only, optional
+  ? 10 => uint,             ; hour up to which a pickup reaches: pickup only
+}
+
+; pickup content (ADR 0051 §5a), sealed to the patron's one-time key: at most 3 windows
+pickup-window = [ epoch: uint, f: bstr .size 16, b: bstr .size 16 ]
+
+tag     = bstr .size 8      ; first 8 bytes of the device ID (ADR 0013)
+id      = bstr .size 8      ; message ID, random, the same on every path
+device  = bstr .size 16     ; device ID
+hash    = bstr .size 16     ; plaintext hash: first 16 bytes of SHA-256 of the plaintext; finds the same
+                            ; content across uploads. Not the blob ID.
+blob-id = bstr .size 32     ; SHA-256 of the encrypted blob bytes = ANDP object ID (ADR 0035 §11)
+space   = bstr .size 32     ; Ed25519 public key of a ANDP space (raw; the space name is its Base64url)
+
+kind = &(
+  circle: 1, direct: 2, react: 3, read: 4, receipt: 5,
+  member: 10, meta: 11, profile: 12, want: 13, have: 14, history: 15,
+  left: 16, rekey: 17, removed: 18, sync: 19,
+  ask: 20, patron: 21,      ; open packets: b is empty (ADR 0051)
+  pickup: 22,               ; sealed to the patron's one-time key (ADR 0051 §5a)
+  subscribe: 23, unsubscribe: 24, channel-key: 25,   ; channel subscribers (ADR 0062 §11)
+  delete: 26,               ; author withdraws an own message (ADR 0068)
+  alive: 27, care: 28,      ; sign of life in a chosen circle and helpers' answers (ADR 0083)
+  hold: 29,                 ; receipt entry with the refs of a message without expiry (ADR 0088)
+)
+
+content = {
+  ? 0 => id,                ; message ID
+  ? 1 => uint,              ; sender time, seconds since 1970
+  ? 2 => tstr,              ; text
+  ? 3 => id,                ; reference: message a reaction or delete refers to, or that a circle/direct message answers (ADR 0092)
+  ? 4 => tag,               ; reference: author of that message
+  ? 5 => tstr,              ; emoji; "" = reaction withdrawn
+  ? 6 => [* id],            ; message IDs of a read or delivery receipt
+  ; internet only from here, except 10 and 32 (ADR 0058)
+  ? 7 => tstr,              ; sender name
+  ? 8 => bstr .size 32,     ; sender X25519 key
+  ? 9 => bstr .size 32,     ; sender Ed25519 key; device ID derived from it, must match `from`
+  ? 10 => uint,             ; Meshtastic node the sender currently uses; over radio in circle and direct messages if it fits
+  ? 11 => [* attachment],
+  ? 12 => image,            ; own picture (member, profile)
+  ? 13 => uint,             ; time of the picture change, ms
+  ? 14 => hash,             ; hash of the own picture
+  ? 15 => hash,             ; hash of the circle picture
+  ? 16 => meta,
+  ? 17 => hash,             ; want/have: wanted hash
+  ? 18 => image,            ; have: where it is
+  ? 19 => bool,             ; member: needs the history
+  ? 20 => history,
+  ? 21 => rekey,
+  ? 22 => removed,
+  ? 23 => space,            ; sender's personal mailbox (core on ANDP)
+  ? 24 => bstr,             ; ANDP grant (CBOR [body, sig]) to write into 23
+  ? 25 => bstr .cbor proof, ; key chain of the sender's person (ADR 0042)
+  ? 26 => bstr .size 16,    ; person ID of the conversation partner (copies to own devices)
+  ? 27 => [uint, uint],     ; state of the sender's key chain: certificate n, list seq
+  ? 28 => tstr,             ; circle ID of a read state for the own other devices
+  ? 29 => sync,             ; snapshot for the own other devices (kind sync)
+  ? 30 => sync-keys,        ; new private keys of the person for the own other devices (kind sync)
+  ? 31 => own-data,         ; data of the app for the own other devices (kind sync)
+  ? 32 => uint,             ; receipt: paths the confirmed messages arrived on, bit 0 internet, bit 1 radio (ADR 0058)
+  ? 33 => channel-ref,      ; subscribe, unsubscribe, channel key (ADR 0062 §11)
+  ? 34 => link,             ; preview of the first web link in field 2 (ADR 0069)
+  ? 35 => alive,            ; sign of life (ADR 0083 §5); also over radio
+  ? 36 => care,             ; answer of a helper (ADR 0083 §4); also over radio
+  * int => any,             ; further fields, skipped by older readers
+}
+
+; 0 blob, 1 blob key, 2 type, 3 name, 4 size, 5 width, 6 height, 7 content hash,
+; 8 voice message length ms, 9 text is its automatic transcript (ADR 0030)
+; 0 url (https, must appear in the text), 1 title, 2 description, 3 site, 4 picture (attachment of type "jpg")
+link = { 0 => tstr, ? 1 => tstr, ? 2 => tstr, ? 3 => tstr, ? 4 => attachment }
+
+attachment = { 0 => blob-id, 1 => bstr .size 32, 2 => "jpg" / "pdf" / "m4a" / "file", ? 3 => tstr, 4 => uint, ? 5 => uint, ? 6 => uint, ? 7 => hash, ? 8 => uint, ? 9 => bool }
+; blob, blob key, space that holds the blob, content hash
+image      = { 0 => blob-id, 1 => bstr .size 32, 2 => space, ? 3 => hash }
+; name, time, by; picture, time, by
+meta       = { 0 => tstr, 1 => uint, 2 => device, ? 3 => image, 4 => uint, 5 => device }
+; plan ID, state (1 start, 2 ok, 3 moving, 4 missed, 5 end, 6 battery, 7 timeout), start, until, due (s),
+; hint, alarm, quiet (s), motion, label, battery %
+alive      = { 0 => id, 1 => uint, 2 => uint, 3 => uint, 4 => uint, 5 => uint, 6 => uint, 7 => uint, ? 8 => bool, ? 9 => tstr, ? 10 => uint }
+care       = { 0 => id, 1 => 1 / 2 / 3 }  ; looking, away, back
+; circle, count, from, to (ms), parts
+history    = { 0 => tstr, 1 => uint, ? 2 => uint, ? 3 => uint, ? 4 => [* part] }
+; blob, blob key, personal mailbox space of the writer, SHA-256 of the plaintext,
+; 4: delete token from before ANDP 1, no longer written (ANDP deletes need the delete right),
+; 5: ANDP grant {delete, grantee: new member, scope: part ID} (CBOR [body, sig])
+part       = { 0 => blob-id, 1 => bstr .size 32, 2 => space, 3 => bstr .size 32, ? 4 => bstr .size 32, ? 5 => bstr }
+; new circle secret, epoch, removed device, reason ("remove" / "reset" / "left"), circle, time (ms)
+rekey      = { 0 => bstr .size 32, 1 => uint, ? 2 => device, ? 3 => tstr, ? 4 => tstr, ? 5 => uint }
+; epoch, circle, time (ms)
+removed    = { 0 => uint, ? 1 => tstr, ? 2 => uint }
+
+; HKDF is HKDF-SHA256 with salt "anmp" and 32 bytes output.
+;
+; Encryption (AES-256-GCM, 32-byte key, random 12-byte nonce):
+;   no recipient:   circle key       HKDF(circle secret, "anmp/v1/chat-aead")
+;   with recipient: device pair key  HKDF(X25519(own, peer), "anmp/v1/direct|" + both device IDs as Base64url,
+;                                    sorted, joined with "|")
+;   AAD  = "anmp/v1/aad\n" || scope || "\n" || h
+;
+; Signature (Ed25519 with the device key, ADR 0013):
+;   over "anmp/v1/sig\n" || scope || "\n" || CBOR([h, c])
+;   always over the internet; over radio for circle messages and reactions, can be switched off (default on).
+;
+; scope binds the packet to its place and is not in the packet: the circle ID in a circle,
+; the empty text for direct packets (personal mailbox, radio direct).
+;
+; Blobs (attachments, pictures, history parts): AES-256-GCM with a random key per blob, AAD "anmp/v1/att",
+; ID = SHA-256 of nonce || ciphertext || tag. The receiver checks the hash before decrypting.
+;
+; Envelope on ANDP: every packet stored as a ANDP entry is
+;   AES-256-GCM(envelope key, packet, AAD = "anmp/v1/env\n" || space), random nonce in front, tag at the end.
+;   circle space:     HKDF(circle secret, "anmp/v1/env")
+;   personal mailbox: HKDF(mailbox space public key, "anmp/v1/inbox") (one mailbox per person, ADR 0042;
+;                     before: HKDF(owner X25519 public key, "anmp/v1/inbox"))
+;
+; Forwarded (ADR 0022): a direct packet for another installation received over radio is put unchanged
+; into that installation's personal mailbox. The recipient recognizes it by a header without fields 4/5
+; and opens it like a radio packet.
+;
+; Radio limit: 233 bytes packet (Meshtastic payload). Text in it (ASCII):
+;   circle message signed 94 bytes, unsigned 160 bytes, direct message 152 bytes.
+
+; Personal store entry (ADR 0041), sealed with HKDF(store secret, "anmp/v1/store-aead"), AAD "anmp/v1/store-aead".
+store-entry = { 0 => tstr, 1 => tstr, 2 => tstr, 3 => uint, 4 => blob-id, 5 => bstr .size 32, 6 => uint, 7 => uint, ? 8 => uint, ? 9 => uint, ? 10 => store-doc, ? 11 => tstr, ? 12 => uint, ? 13 => store-title }  ; 11: person ID of who put the file in (shared quota); 12: in the bin since, ms (ADR 0086); 13: title (ADR 0091)
+; Kind and details of a document (ADR 0067): kind, from, date ms, amount, until ms, by (0 recognized, 1 person), rules.
+store-doc = { 0 => tstr, ? 1 => tstr, ? 2 => uint, ? 3 => { 0 => int, 1 => tstr }, ? 4 => uint, ? 5 => uint, ? 6 => uint,
+              ? 7 => [* tstr], ? 8 => uint }   ; 7 topics, 8 seen (ADR 0070)
+; Title of a file (ADR 0091): text (at most 40 characters), by (0 made on a device, 1 person), rules.
+store-title = { 0 => tstr, ? 1 => uint, ? 2 => uint }
+
+; Persons and devices (ADR 0042). The root key signs the certificate, the person key the device list.
+;   certificate sig over "anmp/v1/person-cert\n" || body, list sig over "anmp/v1/devices\n" || body.
+;   Person ID = SHA-256("anmp/v1/person\n" || root public key)[0..16].
+signed       = [ body: bstr, sig: bstr .size 64 ]
+person-cert  = { 0 => bstr .size 32, 1 => bstr .size 32, ? 2 => uint, ? 3 => uint }   ; root, person, n, ts ms
+device-list  = { 0 => bstr .size 32, ? 1 => uint, ? 2 => uint, ? 3 => uint, 4 => space, 5 => [+ device-entry], ? 6 => [* device] }
+                                                         ; root, n, seq, ts ms, mailbox, devices, revoked
+device-entry = { 0 => bstr .size 32, 1 => bstr .size 32, ? 2 => tstr, ? 3 => uint, ? 4 => uint }   ; Ed25519, X25519, name, added ms, node
+proof        = { 0 => bstr .cbor signed, 1 => bstr .cbor signed }   ; certificate, device list
+
+; Snapshot for the own other devices (kind sync, ADR 0042): time ms, name, circles, contact devices, gone, channels.
+sync         = { 0 => uint, ? 1 => tstr, ? 2 => [* sync-circle], ? 3 => [* sync-contact], ? 4 => [* gone], ? 5 => [* sync-channel] }
+sync-circle  = { 0 => tstr, 1 => tstr, 2 => bstr .size 32, ? 3 => uint, ? 4 => uint, ? 5 => device }
+sync-contact = { 0 => tstr, 1 => bstr .size 32, 2 => bstr .size 32, ? 3 => space, ? 4 => bstr .cbor proof }
+gone         = { 0 => tstr, 1 => uint }       ; circle ID, person ID or channel ID, time ms
+; Channel (ADR 0062): space (tstr), name, private read key, read grant, joined ms, curated, owner seed (own channels),
+; name changed ms, read key changed ms, device addresses (own channels), IDs of revoked device addresses (hex sender keys).
+sync-channel = { 0 => tstr, 1 => tstr, 2 => bstr .size 32, 3 => tstr, ? 4 => uint, ? 5 => true, ? 6 => bstr .size 32,
+                 ? 7 => uint, ? 8 => uint, ? 9 => [* sync-ingress], ? 10 => [* tstr],
+                 ? 11 => [* sync-subscriber], ? 12 => [* gone], ? 13 => channel-join }
+                                                         ; 11, 12: subscribers and removed ones (own channels), 13: way to the owner (ADR 0062 §11)
+sync-subscriber = { 0 => bstr .size 16, ? 1 => tstr, 2 => bstr .size 32, 3 => space, 4 => bstr, ? 5 => uint, ? 6 => uint }
+                                                         ; device, name, X25519 key, mailbox, write grant (CBOR), first and last announcement ms
+sync-ingress = { 0 => bstr .size 32, ? 1 => tstr, ? 2 => uint, 3 => bstr .size 32, 4 => tstr, ? 5 => tstr }
+                                                         ; token, label, created ms, sender seed, sender grant, record entry ID
+sync-keys    = { 0 => bstr .size 32, 1 => bstr .size 32, ? 2 => bstr .size 32, ? 3 => bstr .size 32 }
+                                                         ; person key, mailbox owner, store secret, state secret
+; Kern-space entry (sealed with HKDF(recovery code, "anmp/v1/core-aead")) and state space entry (HKDF(state secret, "anmp/v1/state-aead")).
+kern-entry   = { 0 => bstr .size 32, 1 => bstr .size 32, 2 => uint }      ; root key seed, state secret, ts ms
+state-entry  = { 0 => uint, 1 => bstr .cbor proof, 2 => bstr .size 32, 3 => bstr .size 32, ? 4 => bstr .size 32, ? 5 => sync, ? 6 => { * tstr => bstr } }
+own-data     = { 0 => tstr, 1 => [* part], ? 2 => uint }   ; topic, parts, ts ms
+; Password space entry, sealed with HKDF(store secret, "anmp/v1/vault-aead"): changed ms, vault of the app, key of the app.
+vault-entry  = { 0 => uint, 1 => bstr, ? 2 => bstr }
+
+; Alerts and channels (ADR 0062), packet "AA\x01": 41 41 01 || eph.pub(32) || nonce(12) || AES-256-GCM(signed) || tag(16)
+;   key = HKDF(X25519(eph, read), salt "anmp", info "anmp/v1/alert-seal" || eph.pub || read.pub), AAD = 41 41 01 || eph.pub
+;   sig = Ed25519 over "anmp/v1/alert" || body bytes
+alert-signed = { 0 => bstr .cbor alert-body, 1 => bstr .size 32, 2 => bstr .size 64 }   ; body, signer, sig
+alert-body   = {
+  0 => bstr .size 8,         ; id
+  1 => uint,                 ; ts, Unix seconds
+  2 => 1 / 2 / 3,            ; prio: info, warning, alarm
+  ? 3 => tstr,               ; title, <= 200 bytes
+  4 => tstr,                 ; text, <= 4096 bytes, always written; empty only with an attachment
+  ? 5 => tstr,               ; context URL, http(s) only
+  ? 6 => uint,               ; until; absent = ts + 86400
+  ? 7 => bstr .size 8,       ; replaces
+  ? 8 => tstr,               ; source
+  ? 9 => [* tstr],           ; area: regional key prefixes (curated channels)
+  ? 10 => [* attachment],    ; at most 5
+  ? 11 => bool,              ; ended (only true is written)
+  ? 12 => bstr .size 8,      ; key: incident, SHA-256("anmp/v1/alert-key" || key)[0:8]
+}
+; Channel link https://anynear.net/a#<b64u>
+channel-link = { 0 => 1, 1 => bstr .size 32, 2 => tstr, 3 => tstr, 4 => bstr .size 32, 5 => tstr, ? 6 => true, ? 7 => channel-join }
+                                                   ; v, network, space, name, read key, read grant, curated, way to the owner
+channel-join = { 0 => bstr .size 16, 1 => bstr .size 32, 2 => space, 3 => bstr }
+                                                   ; owner device, its X25519 key, its mailbox, write grant (CBOR [body, sig]) (ADR 0062 §11)
+channel-ref  = { 0 => tstr, ? 1 => bstr .size 32, ? 2 => bstr .size 32, ? 3 => tstr, ? 4 => bstr .size 64 }
+                                                   ; channel space, hash of the held read grant (subscribe),
+                                                   ; new read key, new read grant, owner signature (channel key)
+; Device address record, entry 41 49 01 || nonce(12) || AES-256-GCM(HKDF(token, "anmp/v1/ingress-aead"), record, AAD 41 49 01) || tag
+ingress-record = { 0 => 1, 1 => tstr, 2 => bstr .size 32, 3 => bstr .size 32, 4 => tstr, ? 5 => tstr }
+                                                   ; v, channel space, read public key, sender seed, sender grant, label (omitted when empty)
+
+; Usage statistics (ADR 0045), POST /stats/v1; sig = Ed25519 with the stats key over "anmp/v1/stats-sig\n" || body bytes
+stats-report = { 0 => bstr .cbor stats-body, 1 => bstr .size 64 }   ; body, sig; at most 512 bytes
+stats-body   = {
+  1 => tstr,                 ; UTC day YYYY-MM-DD
+  2 => bstr .size 32,        ; public stats key of the day
+  3 => bstr .size 16,        ; person marker of the day
+  4 => "android" / "ios" / "web",
+  5 => tstr,                 ; version X.Y.Z or "other", <= 32 characters
+  6 => 0..4,                 ; radios on this device
+  7 => 0..4,                 ; own and shared channels on this device
+  8 => [* tstr],             ; curated channel IDs, at most 8
+  9 => 1..6,                 ; devices of the person
+  10 => 0..6,                ; circles of the person
+}
+; Switch report (ADR 0045): same envelope as stats-report, body bstr .cbor stats-switch
+stats-switch = {
+  1 => tstr,                 ; UTC day YYYY-MM-DD
+  2 => bstr .size 32,        ; public stats key of the day
+  4 => "android" / "ios" / "web",
+  11 => bool,                ; true: switched on, false: switched off
+}

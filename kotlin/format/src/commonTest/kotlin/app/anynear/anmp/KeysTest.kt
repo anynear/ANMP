@@ -63,9 +63,9 @@ class KeysTest {
 
     @Test
     fun legacyChannelNamesAreRecognizedForRemoval() {
-        assertTrue(AnmpKeys.isLegacyChannelName("PYRSA-K3V9Q"))
-        assertFalse(AnmpKeys.isLegacyChannelName("PYRSA-K3V9"), "too short")
-        assertFalse(AnmpKeys.isLegacyChannelName("PYRSA-K3V0Q"), "0 is not in the alphabet")
+        assertTrue(AnmpKeys.isLegacyChannelName(AnmpInfo.CHANNEL_PREFIX + "K3V9Q"))
+        assertFalse(AnmpKeys.isLegacyChannelName(AnmpInfo.CHANNEL_PREFIX + "K3V9"), "too short")
+        assertFalse(AnmpKeys.isLegacyChannelName(AnmpInfo.CHANNEL_PREFIX + "K3V0Q"), "0 is not in the alphabet")
         assertFalse(AnmpKeys.isLegacyChannelName("anynear"))
         assertFalse(AnmpKeys.isLegacyChannelName(null))
     }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/fxamacker/cbor/v2"
 )
@@ -117,7 +118,7 @@ type wireHeader struct {
 	O *int64   `cbor:"10,keyasint,omitempty"`
 }
 
-// Content is the encrypted content, limited to the fields that go over radio (0–6, 10, 32). Readers skip all
+// Content is the encrypted content, limited to the fields that go over radio (0–6, 10, 32, 35, 36). Readers skip all
 // other fields; an internet packet opened here keeps them only in its original bytes.
 type Content struct {
 	ID      []byte   `cbor:"0,keyasint,omitempty"`  // message ID, 8
@@ -129,6 +130,129 @@ type Content struct {
 	IDs     [][]byte `cbor:"6,keyasint,omitempty"`  // confirmed message IDs
 	Node    *int64   `cbor:"10,keyasint,omitempty"` // Meshtastic node number (ADR 0058)
 	Arrived *int64   `cbor:"32,keyasint,omitempty"` // receipt: bit 0 internet, bit 1 radio
+	Alive   *Alive   `cbor:"35,keyasint,omitempty"` // sign of life (kind alive, ADR 0083 §5)
+	Care    *Care    `cbor:"36,keyasint,omitempty"` // answer of a helper (kind care, ADR 0083 §4)
+}
+
+// Alive is a sign of life (content field 35, ADR 0083 §5): every packet carries the whole plan. Times in Unix
+// seconds by the sender's clock, durations in seconds. Fields 0–7 are required; a content without one of them is
+// invalid, as in kotlin/format.
+type Alive struct {
+	Plan    []byte  `cbor:"0,keyasint"`           // plan ID, the message ID of its start, 8
+	State   int64   `cbor:"1,keyasint"`           // 1 start … 7 timeout; readers take unknown states as 2 (ok)
+	Start   int64   `cbor:"2,keyasint"`           // start
+	Until   int64   `cbor:"3,keyasint"`           // latest end
+	Due     int64   `cbor:"4,keyasint"`           // next sign of life at the latest
+	Hint    int64   `cbor:"5,keyasint"`           // after due: hint
+	Alarm   int64   `cbor:"6,keyasint"`           // after due: alarm
+	Quiet   int64   `cbor:"7,keyasint"`           // how long the phone may lie still
+	Motion  bool    `cbor:"8,keyasint,omitempty"` // movement counts as a sign of life
+	Label   *string `cbor:"9,keyasint,omitempty"` // name of the template, at most 40 characters; over radio left out if it does not fit
+	Battery *int64  `cbor:"10,keyasint,omitempty"`
+}
+
+// Care is a helper's answer to a sign of life (content field 36, ADR 0083 §4): 1 looking, 2 away, 3 back. Both
+// fields are required.
+type Care struct {
+	Plan  []byte `cbor:"0,keyasint"`
+	State int64  `cbor:"1,keyasint"`
+}
+
+// States of a sign of life and of a helper's answer (ADR 0083).
+const (
+	AliveStart   = 1
+	AliveOK      = 2
+	AliveMoving  = 3
+	AliveMissed  = 4
+	AliveEnd     = 5
+	AliveBattery = 6
+	AliveTimeout = 7
+
+	CareLooking = 1
+	CareAway    = 2
+	CareBack    = 3
+
+	// AliveMaxLabel is the longest label in UTF-16 code units, as counted by the apps.
+	AliveMaxLabel = 40
+)
+
+type aliveWire Alive
+
+// UnmarshalCBOR rejects a sign of life without one of the fields 0–7 or with 32-bit fields out of range.
+func (a *Alive) UnmarshalCBOR(data []byte) error {
+	if err := requireKeys(data, 8); err != nil {
+		return err
+	}
+	var w aliveWire
+	if err := decMode.Unmarshal(data, &w); err != nil {
+		return err
+	}
+	for _, n := range []int64{w.State, w.Hint, w.Alarm, w.Quiet} {
+		if n < math.MinInt32 || n > math.MaxInt32 {
+			return errors.New("alive: number out of range")
+		}
+	}
+	if w.Battery != nil && (*w.Battery < math.MinInt32 || *w.Battery > math.MaxInt32) {
+		return errors.New("alive: battery out of range")
+	}
+	*a = Alive(w)
+	return nil
+}
+
+type careWire Care
+
+// UnmarshalCBOR rejects an answer without plan or state.
+func (c *Care) UnmarshalCBOR(data []byte) error {
+	if err := requireKeys(data, 2); err != nil {
+		return err
+	}
+	var w careWire
+	if err := decMode.Unmarshal(data, &w); err != nil {
+		return err
+	}
+	if w.State < math.MinInt32 || w.State > math.MaxInt32 {
+		return errors.New("care: state out of range")
+	}
+	*c = Care(w)
+	return nil
+}
+
+// requireKeys checks that the CBOR map data holds the integer keys 0 … n-1.
+func requireKeys(data []byte, n int) error {
+	var m map[int64]cbor.RawMessage
+	if err := decMode.Unmarshal(data, &m); err != nil {
+		return err
+	}
+	for k := int64(0); k < int64(n); k++ {
+		if _, ok := m[k]; !ok {
+			return fmt.Errorf("field %d missing", k)
+		}
+	}
+	return nil
+}
+
+// Valid reports a plausible sign of life, as the apps check it before they take it (ADR 0083 §5): plan ID of 8
+// bytes, due within start … until, plan at most 400 days, 0 < hint <= alarm <= 1 day, quiet 60 s … 1 day, label at
+// most AliveMaxLabel characters.
+func (a *Alive) Valid() bool {
+	switch {
+	case len(a.Plan) != IDBytes:
+		return false
+	case a.Start <= 0 || a.Until < a.Start || a.Due < a.Start || a.Due > a.Until:
+		return false
+	case a.Until-a.Start > 400*24*3600:
+		return false
+	case a.Hint <= 0 || a.Alarm < a.Hint || a.Alarm > 86400:
+		return false
+	case a.Quiet < 60 || a.Quiet > 86400:
+		return false
+	}
+	return a.Label == nil || len(utf16.Encode([]rune(*a.Label))) <= AliveMaxLabel
+}
+
+// Valid reports an answer with a plan ID of 8 bytes and a known state.
+func (c *Care) Valid() bool {
+	return len(c.Plan) == IDBytes && c.State >= CareLooking && c.State <= CareBack
 }
 
 // wirePacket is [h, b]; also the signed array [h, c].

@@ -131,10 +131,17 @@ class ChannelFlowTest {
         // An owner-signed alert old enough is dropped too (rule 3).
         val old = AnmpAlertBody(AnmpKeys.randomKey().copyOf(8), nowS() - 31L * 86_400, AnmpAlerts.INFO, text = "alt")
         assertTrue(put(space, sender, senderGrant, AnmpAlerts.encode(old, AnmpSpaceKey.fromPrivateKey(record.senderSeed), record.readPublicKey)))
+        // Regional keys belong only into curated channels: here the alert is dropped as a whole.
+        val regional = AnmpAlertBody(AnmpKeys.randomKey().copyOf(AnmpAlerts.ID_BYTES), nowS(), AnmpAlerts.WARNING, text = "Hochwasser", area = listOf("06412"))
+        assertTrue(put(space, sender, senderGrant, AnmpAlerts.encode(regional, AnmpSpaceKey.fromPrivateKey(record.senderSeed), record.readPublicKey)))
         val marker = body("danach")
         assertTrue(put(space, sender, senderGrant, AnmpAlerts.encode(marker, AnmpSpaceKey.fromPrivateKey(record.senderSeed), record.readPublicKey)))
         b.await<CoreEvent.Alert> { it.item.id == marker.id.toHex() }
-        assertTrue(b.all<CoreEvent.Alert>().none { it.item.id == forged.id.toHex() || it.item.id == old.id.toHex() || it.item.text == "fremd" })
+        assertTrue(
+            b.all<CoreEvent.Alert>().none {
+                it.item.id == forged.id.toHex() || it.item.id == old.id.toHex() || it.item.id == regional.id.toHex() || it.item.text == "fremd"
+            },
+        )
 
         // The same alert again (another object, e.g. written twice) is shown once.
         assertTrue(put(space, sender, senderGrant, AnmpAlerts.encode(marker, AnmpSpaceKey.fromPrivateKey(record.senderSeed), record.readPublicKey)))
@@ -192,6 +199,15 @@ class ChannelFlowTest {
         val d = device("Dora", config = withCurated)
         assertIs<ChannelJoinResult.Joined>(d.core.joinChannel(curatedLink))
         assertTrue(d.core.channel(c.id)!!.curated)
+
+        // Regional keys count only where the channel is curated: Dora takes the alert, Ben drops it.
+        val ingress = assertNotNull(a.core.createIngress(c.id, "Warndienst"))
+        val record = ingressRecord(ingress)
+        val regional = AnmpAlertBody(AnmpKeys.randomKey().copyOf(AnmpAlerts.ID_BYTES), nowS(), AnmpAlerts.WARNING, text = "Hochwasser", area = listOf("06412"))
+        assertTrue(put(Key.parse(c.id), SigningKey.fromSeed(record.senderSeed), Grant.parse(record.grant),
+            AnmpAlerts.encode(regional, AnmpSpaceKey.fromPrivateKey(record.senderSeed), record.readPublicKey)))
+        assertEquals(listOf("06412"), d.await<CoreEvent.Alert> { it.item.id == regional.id.toHex() }.item.area)
+        assertTrue(b.none<CoreEvent.Alert>(2.seconds) { it.item.id == regional.id.toHex() })
 
         val foreign = AnmpAlerts.channelLink(config.linkHost, AnmpChannelInvite(ByteArray(32) { 9 }, c.id, "x", AnmpKeys.decodeOrNull(state.readKey)!!, state.grant))
         assertEquals(ChannelJoinResult.ForeignNetwork, d.core.joinChannel(foreign))

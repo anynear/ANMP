@@ -27,7 +27,7 @@ class AlertTest {
         val readPublic = AnmpAlerts.readPublicKey(Fixtures.readKey)
         val packet = AnmpAlerts.encode(body(), sender, readPublic)
         assertTrue(AnmpAlerts.isAlert(packet))
-        assertFalse(Anmp.isPmp(packet))
+        assertFalse(Anmp.isAnmp(packet))
         val a = assertNotNull(AnmpAlerts.open(packet, Fixtures.readKey))
         assertContentEquals(sender.publicKey, a.signer)
         assertEquals("Rauch im Keller", a.body.text)
@@ -80,6 +80,28 @@ class AlertTest {
         assertFalse(AnmpAlerts.isValid(body(replaces = ByteArray(7))))
         assertFalse(AnmpAlerts.isValid(AnmpAlertBody(ByteArray(7), 1, 1, text = "x")))
         assertFailsWith<IllegalArgumentException> { AnmpAlerts.encodeBody(body(prio = 9)) }
+        // At most 10 MiB plaintext per attachment.
+        val big = AnmpAttachment(ByteArray(32), ByteArray(32), "pdf", size = AnmpAlerts.MAX_ATTACHMENT_BYTES)
+        assertTrue(AnmpAlerts.isValid(body(attachments = listOf(big))))
+        assertFalse(AnmpAlerts.isValid(body(attachments = listOf(att, AnmpAttachment(ByteArray(32), ByteArray(32), "pdf", size = AnmpAlerts.MAX_ATTACHMENT_BYTES + 1)))))
+        assertFalse(AnmpAlerts.isValid(body(attachments = listOf(AnmpAttachment(ByteArray(32), ByteArray(32), "jpg", size = -1)))))
+    }
+
+    @Test
+    fun areaOnlyInCuratedChannels() = runTest {
+        val regional = AnmpAlertBody(Fixtures.alertId, 1_760_000_000, AnmpAlerts.WARNING, text = "Hochwasser", area = listOf("06412"))
+        assertTrue(AnmpAlerts.isValid(regional))
+        assertTrue(AnmpAlerts.isValidIn(regional, curated = true))
+        assertFalse(AnmpAlerts.isValidIn(regional, curated = false))
+        assertTrue(AnmpAlerts.isValidIn(body(), curated = false))
+        // A body over the attachment limit does not open, whoever signed it.
+        val sender = AnmpSpaceKey.fromPrivateKey(Fixtures.senderSeed)
+        val bodyBytes = Anmp.cbor.encodeToByteArray(
+            AnmpAlertBody.serializer(),
+            body(attachments = listOf(AnmpAttachment(ByteArray(32), ByteArray(32), "pdf", size = AnmpAlerts.MAX_ATTACHMENT_BYTES + 1))),
+        )
+        val signed = Anmp.cbor.encodeToByteArray(AnmpAlerts.Signed.serializer(), AnmpAlerts.Signed(bodyBytes, sender.publicKey, sender.sign(AnmpAlerts.signingBytes(bodyBytes))))
+        assertNull(AnmpAlerts.verify(signed))
     }
 
     @Test

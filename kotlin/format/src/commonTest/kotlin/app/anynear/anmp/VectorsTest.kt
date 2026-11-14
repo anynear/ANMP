@@ -43,7 +43,11 @@ class VectorsTest {
             "packets" to mapOf("circleSigned" to setOf("signature", "opened", "packet"), "directInternet" to setOf("opened", "packet")),
             "envelope" to mapOf("circle" to setOf("sealed"), "inbox" to setOf("sealed")),
             "person" to mapOf("chain" to setOf("cert", "list", "proof")),
-            "radio" to mapOf("circlePacket" to setOf("signature", "packet", "opened")),
+            "radio" to mapOf(
+                "circlePacket" to setOf("signature", "packet", "opened"),
+                "alivePacket" to setOf("packet", "opened"),
+                "carePacket" to setOf("packet", "opened"),
+            ),
             "alert" to mapOf("sender" to setOf("signed", "packet"), "owner" to setOf("signed", "packet"), "channelKey" to setOf("sig")),
             "stats" to mapOf("report" to setOf("signature", "report"), "switchOff" to setOf("report")),
             "mailbox" to mapOf("direct" to setOf("packet")),
@@ -395,6 +399,24 @@ class VectorsTest {
         val directPacket = Anmp.encode(directHeader, directContent, Anmp.DIRECT_SCOPE, AnmpAead.withFixedNonce(pairKey, Fixtures.nonce(0x0B)))
 
         val unsignedCircle = Anmp.encode(radio.circleHeader, circleContent, scope, AnmpAead.withFixedNonce(circle.aeadKey, Fixtures.nonce(0x0D)))
+
+        // Sign of life and a helper's answer over radio (ADR 0083): circle kinds in the public form, always signed.
+        val aliveHeader = AnmpHeader(AnmpKind.ALIVE, radio.sender, epoch = radio.circleHeader.epoch, route = radio.circleRoute)
+        fun aliveOf(label: String?) = AnmpAlive(
+            Fixtures.messageId, AnmpAliveState.START, ts, ts + 8 * 3600, ts + 900, 300, 600, 900, motion = true, label = label, battery = 80,
+        )
+        val aliveContent = AnmpContent(id = Fixtures.messageId, ts = ts, alive = aliveOf("Wandern"))
+        val alivePacket = Anmp.encodeFull(aliveHeader, aliveContent, scope, AnmpAead.withFixedNonce(circle.aeadKey, Fixtures.nonce(0x10)), a)
+        val aliveLabelBytes = Anmp.maxTextBytes(aliveHeader, true) { AnmpContent(id = Fixtures.messageId, ts = ts, alive = aliveOf(it)) }
+        val careHeader = AnmpHeader(AnmpKind.CARE, bSender, epoch = radio.circleHeader.epoch, route = radio.circleRoute)
+        val careContent = AnmpContent(id = ByteArray(8) { (0xB0 + it).toByte() }, ts = ts + 60, care = AnmpCare(Fixtures.messageId, AnmpCareState.LOOKING))
+        val carePacket = Anmp.encodeFull(careHeader, careContent, scope, AnmpAead.withFixedNonce(circle.aeadKey, Fixtures.nonce(0x11)), b)
+        val invalidContents = listOf(
+            "aliveWithoutQuiet" to byteArrayOf(0xA1.toByte(), 0x18, 0x23, 0xA7.toByte(), 0x00, 0x48) + Fixtures.messageId +
+                byteArrayOf(0x01, 0x01, 0x02, 0x01, 0x03, 0x02, 0x04, 0x01, 0x05, 0x01, 0x06, 0x01),
+            "careWithoutState" to byteArrayOf(0xA1.toByte(), 0x18, 0x24, 0xA1.toByte(), 0x00, 0x48) + Fixtures.messageId,
+        )
+        for ((name, c) in invalidContents) check(Anmp.decodeContent(c) == null) { "invalid content $name is accepted" }
         val oversize = Anmp.encode(radio.circleHeader, AnmpContent(id = Fixtures.messageId, ts = ts, text = "x".repeat(200)), scope, AnmpAead.withFixedNonce(circle.aeadKey, Fixtures.nonce(0x0E)))
 
         val asker = AnmpEphemeral.of(Fixtures.askerEph)
@@ -462,6 +484,29 @@ class VectorsTest {
                 put("size", directPacket.size)
                 put("publicForm", AnmpRadio.isPublicForm(directPacket))
             }
+            putJsonObject("alivePacket") {
+                put("comment", "ADR 0083: sign of life of deviceA in the circle, public form, signed, circle key, nonce 10; " +
+                    "labelBytes = longest ASCII label that still fits with this plan")
+                put("scope", scope)
+                hex("header", Anmp.encodeHeader(aliveHeader))
+                hex("content", Anmp.encodeContent(aliveContent))
+                hex("packet", alivePacket.packet)
+                hex("opened", alivePacket.opened)
+                put("size", alivePacket.packet.size)
+                put("labelBytes", aliveLabelBytes)
+            }
+            putJsonObject("carePacket") {
+                put("comment", "ADR 0083: deviceB answers the plan of alivePacket with looking (1), public form, signed by deviceB, nonce 11")
+                put("scope", scope)
+                hex("header", Anmp.encodeHeader(careHeader))
+                hex("content", Anmp.encodeContent(careContent))
+                hex("packet", carePacket.packet)
+                hex("opened", carePacket.opened)
+                put("size", carePacket.packet.size)
+            }
+            put("invalidContent", buildJsonArray {
+                for ((name, c) in invalidContents) add(buildJsonObject { put("name", name); hex("content", c) })
+            })
             put("publicForm", buildJsonArray {
                 for ((name, p) in listOf(
                     "directPacket" to directPacket, "circleUnsigned" to unsignedCircle, "oversize" to oversize,

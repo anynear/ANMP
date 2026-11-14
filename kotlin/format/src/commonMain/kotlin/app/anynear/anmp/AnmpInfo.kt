@@ -88,7 +88,7 @@ object AnmpInfo {
     /** Name of the one radio channel of all anynear radios (ADR 0051, 0061 decision 6). */
     const val RADIO_CHANNEL_NAME = "anynear"
 
-    /** Radio channel of the PYRSA app before the cut (ADR 0061 decision 6); apps remove it. */
+    /** Radio channel of the app before ANMP (ADR 0061 decision 6); apps remove it. The value stays to recognize it. */
     const val LEGACY_RADIO_CHANNEL_NAME = "PYRSA"
 
     /** Prefix of the person ID hash, followed by `\n` root public key (ADR 0042). */
@@ -157,6 +157,6 @@ object AnmpInfo {
     /** Signed bytes of a stats report, followed by `\n` and the body bytes (ADR 0045). */
     const val STATS_SIG = "anmp/v1/stats-sig"
 
-    /** Prefix of circle radio channel names of the PYRSA app (before ADR 0051; apps remove such channels). */
+    /** Prefix of the circle radio channel names of the app before ADR 0051; apps remove such channels. The value stays to recognize them. */
     const val CHANNEL_PREFIX = "PYRSA-"
 }

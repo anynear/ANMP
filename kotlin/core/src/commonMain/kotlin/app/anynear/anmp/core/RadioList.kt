@@ -1,5 +1,6 @@
 package app.anynear.anmp.core
 
+import app.anynear.andp.StrictJson
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -13,14 +14,14 @@ import kotlin.io.encoding.Base64
  * Radio list (ADR 0054 §1b, ANMP "Radio list"): regions with their area, the preset of channel 0, whether ANMP goes out
  * on channel 0, and the communities' public channels. ANDP checks head and signature (ANDP §5.9); this is the content.
  * Nothing of it is built into the app: a new community or another preset needs no app update. The same signed list
- * carries the update rules for app and web app (Docs ADR 0096).
+ * carries the update rules for app and web app (ADR 0096).
  */
 data class RadioList(
     val issued: Long,
     val regions: List<RadioRegion>,
-    /** What the network asks of app builds (Android, iOS), Docs ADR 0096; `null` asks nothing. */
+    /** What the network asks of app builds (Android, iOS), ADR 0096; `null` asks nothing. */
     val app: UpdateRule? = null,
-    /** What the network asks of web app builds, Docs ADR 0096; `null` asks nothing. */
+    /** What the network asks of web app builds, ADR 0096; `null` asks nothing. */
     val web: UpdateRule? = null,
 ) {
     /** The first region whose area contains the point, `null` outside all regions. The point never leaves the phone. */
@@ -35,10 +36,12 @@ data class RadioList(
 
         /**
          * Reads the text of a radio list that ANDP accepted. Unknown fields are ignored; a region or community that is
-         * invalid or names something this app does not know is skipped, the rest counts.
+         * invalid or names something this app does not know is skipped, the rest counts. A repeated key anywhere in the
+         * text rejects the whole list, as in ANDP.
          */
         fun parse(text: String): RadioList {
-            val obj = coreJson.parseToJsonElement(text) as? JsonObject ?: throw IllegalArgumentException("radio list is not an object")
+            // The same strict reading as ANDP's check of the head (ANDP §1): a repeated key rejects the list.
+            val obj = StrictJson.parse(text) as? JsonObject ?: throw IllegalArgumentException("radio list is not an object")
             val issued = (obj["issued"] as? JsonPrimitive)?.longOrNull ?: throw IllegalArgumentException("radio list without issued")
             val regions = (obj["regions"] as? JsonArray).orEmpty().mapNotNull { RadioRegion.read(it) }
             return RadioList(issued, regions, UpdateRule.read(obj["app"]), UpdateRule.read(obj["web"]))

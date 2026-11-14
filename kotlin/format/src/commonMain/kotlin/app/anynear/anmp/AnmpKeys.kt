@@ -26,7 +26,7 @@ class AnmpAead private constructor(
 }
 
 /**
- * Ed25519 owner key of a ANDP space. [space] is the Base64url public key (ANDP §2). Used for the circle space
+ * Ed25519 owner key of an ANDP space. [space] is the Base64url public key (ANDP §2). Used for the circle space
  * ([AnmpCircleKeys.space]) and for the personal mailbox, whose random key pair the app creates and keeps (ADR 0035 §11).
  */
 @JsExport
@@ -162,7 +162,7 @@ class AnmpMailbox private constructor(
 /** Key derivation and identifiers of ANMP version v1. */
 @JsExport
 object AnmpKeys {
-    /** Alphabet of the circle channels of the PYRSA app (no 0, 1, I, O); only to recognize them for removal. */
+    /** Alphabet of the circle channels of the app before ADR 0051 (no 0, 1, I, O); only to recognize them for removal. */
     private const val LEGACY_CHANNEL_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
     /** Meshtastic limit for channel names. */
@@ -211,7 +211,7 @@ object AnmpKeys {
     suspend fun localStorageKey(xPrivateKey: ByteArray): ByteArray = AnmpCrypto.hkdf(xPrivateKey, AnmpInfo.LOCAL_STORAGE)
 
     /**
-     * `true` for a circle radio channel of the PYRSA app (`PYRSA-` and 5 characters, before ADR 0051). There are no
+     * `true` for a circle radio channel of the app before ADR 0051 ([AnmpInfo.CHANNEL_PREFIX] and 5 characters). There are no
      * circle channels in ANMP; apps only recognize these names to remove them (ADR 0061 decision 6).
      */
     fun isLegacyChannelName(name: String?): Boolean =
@@ -228,7 +228,7 @@ object AnmpKeys {
 }
 
 /**
- * Envelope around a ANMP packet stored as a ANDP entry, so that relays never see the ANMP header:
+ * Envelope around an ANMP packet stored as an ANDP entry, so that relays never see the ANMP header:
  * AES-256-GCM(envelope key, packet, AAD = `anmp/v1/env\n` || space), random nonce in front, tag at the end.
  */
 @JsExport

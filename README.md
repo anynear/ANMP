@@ -6,8 +6,8 @@ repository holds the specification of the format and the library the apps are bu
 signatures, key derivation, circles, contacts and mailboxes on top of ANDP (anynear Distributed Protocol, repository
 `anynear/ANDP`), the content-blind store the packets are kept in.
 
-**Status:** version v1, in use in the anynear apps. Not independently audited. Read the section "Security
-considerations" of `spec/anmp.md` before relying on it: v1 has no forward secrecy, among other limits.
+**Status:** version v1, in use in the anynear apps since November 2026. What v1 protects and where it stops (for
+example, it has no forward secrecy) is in the section "Security considerations" of `spec/anmp.md`.
 
 | Path | Content |
 |---|---|
@@ -51,9 +51,9 @@ go test ./...                                                              # Go 
 Kotlin writes the vectors, Go checks them (ADR 0054 §3a): a change to the radio way changes both languages and the
 vectors in the same PR, starting with the vector.
 
-`:core:jvmTest` also runs the core against the Go test relay of the private repository ANDP-Peer (next to `ANDP` or
-`ANDP_PEER_DIR`, `go run ./internal/cmd/testrelay`) when it and Go are present; `ANMP_REQUIRE_GO=1` makes a missing
-one an error. The other tests run
-against an in-memory relay network (`core/src/commonTest/.../FakeNet.kt`) that also checks revocations.
+`:core:jvmTest` also runs the core against a Go test relay (repository ANDP-Peer, not part of this repository; next
+to `ANDP` or `ANDP_PEER_DIR`, `go run ./internal/cmd/testrelay`) when it and Go are present; `ANMP_REQUIRE_GO=1`
+makes a missing one an error. The other tests run against an in-memory relay network (`core/src/commonTest/.../FakeNet.kt`) that
+also checks revocations.
 
 JDK 21, Android SDK via `kotlin/local.properties` (`sdk.dir=…`, not committed).

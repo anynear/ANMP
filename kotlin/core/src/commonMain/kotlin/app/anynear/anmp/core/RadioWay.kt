@@ -2,7 +2,10 @@ package app.anynear.anmp.core
 
 import app.anynear.andp.B64
 import app.anynear.anmp.Anmp
+import app.anynear.anmp.AnmpAlive
+import app.anynear.anmp.AnmpAliveState
 import app.anynear.anmp.AnmpArrived
+import app.anynear.anmp.AnmpCare
 import app.anynear.anmp.AnmpContent
 import app.anynear.anmp.AnmpKind
 import app.anynear.anmp.AnmpRadio
@@ -36,6 +39,18 @@ internal interface RadioCore {
 
     /** Checked withdrawal (ADR 0068): only if [fromDevice] belongs to the author's person. */
     fun deleteEvent(conversation: Conversation, fromDevice: String, content: AnmpContent): CoreEvent.Deleted?
+
+    /**
+     * Sign of life [alive] heard over radio in [circleId] (ADR 0083), taken like one from the internet. `true` if it is
+     * valid and of another person, so the radio way confirms it.
+     */
+    suspend fun onAlive(circleId: String, fromDevice: String, mid: ByteArray?, ts: Long, alive: AnmpAlive): Boolean
+
+    /** A helper's answer [care] heard over radio in [circleId] (ADR 0083), taken like one from the internet. */
+    suspend fun onCare(circleId: String, fromDevice: String, ts: Long, care: AnmpCare)
+
+    /** Delivery receipt over radio from [fromDevice] for [mids] (b64u), e.g. for own signs of life. */
+    suspend fun onReceipt(fromDevice: String, mids: List<String>)
 
     suspend fun uplink(packet: ByteArray): Boolean
 
@@ -233,6 +248,45 @@ internal class RadioWay(
     }
 
     /**
+     * Own sign of life [alive] in [circleId] over radio (ADR 0083 §7), with the message ID [mid] and time [tsSeconds]
+     * of the internet packet, so readers merge both. Signed like every circle packet, without queue: if the radio is not
+     * there or it does not fit, it goes only over the internet. When the whole plan does not fit, the label stays
+     * behind (readers keep the one they know). Confirmations (ok, moving) go at most once per [ALIVE_CONFIRM_GAP_MILLIS]
+     * and plan (radio budget); start, missed, battery, end and timeout always.
+     */
+    suspend fun alive(circleId: String, mid: ByteArray, tsSeconds: Long, alive: AnmpAlive): RadioSent? {
+        check(AnmpKind.ALIVE)
+        val circle = circle(circleId) ?: return null
+        val confirming = alive.state == AnmpAliveState.OK || alive.state == AnmpAliveState.MOVING
+        val plan = hex(alive.plan)
+        val now = core.nowMillis()
+        if (confirming && aliveLock.withLock { aliveSent[plan]?.let { now - it < ALIVE_CONFIRM_GAP_MILLIS } == true }) return null
+        val bare = AnmpAlive(
+            alive.plan, alive.state, alive.start, alive.until, alive.due, alive.hint, alive.alarm, alive.quiet, alive.motion, null, alive.battery,
+        )
+        val packet = listOfNotNull(alive, bare.takeIf { alive.label != null }).firstNotNullOfOrNull { a ->
+            core.keys.circlePacket(AnmpKind.ALIVE, circle, AnmpContent(id = mid, ts = tsSeconds, alive = a)).takeIf(Anmp::fitsRadio)
+        } ?: return null.also { core.log("radio: sign of life does not fit") }
+        val sent = send(packet) ?: return null
+        aliveLock.withLock {
+            aliveSent[plan] = now
+            while (aliveSent.size > MAX_PLANS) aliveSent.remove(aliveSent.keys.first())
+        }
+        return sent
+    }
+
+    /** Own answer [care] to a sign of life in [circleId] over radio (ADR 0083), like [alive] with the internet packet's ID. */
+    suspend fun care(circleId: String, mid: ByteArray, tsSeconds: Long, care: AnmpCare): RadioSent? {
+        check(AnmpKind.CARE)
+        val circle = circle(circleId) ?: return null
+        val packet = core.keys.circlePacket(AnmpKind.CARE, circle, AnmpContent(id = mid, ts = tsSeconds, care = care)).takeIf(Anmp::fitsRadio) ?: return null
+        return send(packet)
+    }
+
+    private val aliveLock = Mutex()
+    private val aliveSent = LinkedHashMap<String, Long>()
+
+    /**
      * Read receipt for the messages [mids] (b64u) of the device [deviceId]: as many as fit into one radio packet, the
      * newest (last). `null` if nothing went out.
      */
@@ -377,9 +431,22 @@ internal class RadioWay(
                 core.emit(CoreEvent.Reaction(conversation, sender.deviceId, B64.encode(refFrom), B64.encode(ref), emoji, ts))
             }
             AnmpKind.DELETE -> core.deleteEvent(conversation, sender.deviceId, content)?.let { core.emit(it) }
+            AnmpKind.ALIVE -> {
+                val alive = content.alive ?: return
+                if (circle == null || !core.onAlive(circle.id, sender.deviceId, content.id, content.ts, alive)) return
+                // Confirmed over radio like a circle message, so an owner without internet sees that it arrived (ADR 0083 §5.1).
+                val id = content.id?.takeIf { it.size == Anmp.ID_BYTES } ?: return
+                if (firstReceipt(sender.deviceId, B64.encode(id))) receipts.add(sender.deviceId, id, frame.hops.takeIf { !fromInbox })
+            }
+            AnmpKind.CARE -> {
+                val care = content.care ?: return
+                if (circle != null) core.onCare(circle.id, sender.deviceId, content.ts, care)
+            }
             AnmpKind.READ, AnmpKind.RECEIPT -> {
                 val mids = content.ids.orEmpty().map(B64::encode)
-                if (mids.isNotEmpty()) core.emit(CoreEvent.Receipt(sender.deviceId, mids, read = message.header.kind == AnmpKind.READ, viaRadio = true, arrived = content.arrived ?: 0))
+                if (mids.isEmpty()) return
+                if (message.header.kind == AnmpKind.RECEIPT) core.onReceipt(sender.deviceId, mids)
+                core.emit(CoreEvent.Receipt(sender.deviceId, mids, read = message.header.kind == AnmpKind.READ, viaRadio = true, arrived = content.arrived ?: 0))
             }
             else -> Unit
         }
@@ -403,6 +470,11 @@ internal class RadioWay(
         /** Hour tables kept in memory (entries of the radio inbox go back 30 days). */
         private const val MAX_TABLES = 48
         private const val MAX_RECEIPTS = 2_000
+
+        /** Signs of life over radio: confirmations of one plan at most this often (ADR 0083 §7, 15 minutes). */
+        internal const val ALIVE_CONFIRM_GAP_MILLIS = 15L * 60 * 1000
+
+        private const val MAX_PLANS = 64
 
         /** Radio node as Meshtastic names it (`!939d1998`). */
         internal fun nodeName(node: Int): String = "!" + node.toUInt().toString(16).padStart(8, '0')

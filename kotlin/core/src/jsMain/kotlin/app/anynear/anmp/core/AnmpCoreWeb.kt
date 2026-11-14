@@ -158,7 +158,7 @@ class AnmpCoreWeb private constructor(private val core: AnmpCore, private val ho
     fun updateNeeded(): Boolean = core.updateNeeded.value
 
     /**
-     * What the network asks of this web app build [build] right now (Docs ADR 0096, block `web` of the radio list). The
+     * What the network asks of this web app build [build] right now (ADR 0096, block `web` of the radio list). The
      * page shows a notice with the date for `soon` and reloads itself for `required`.
      */
     fun webUpdate(build: Double): WebUpdate = when (val d = core.radioList.value?.web?.demand(build.toLong(), kotlin.js.Date.now().toLong()) ?: UpdateDemand.None) {

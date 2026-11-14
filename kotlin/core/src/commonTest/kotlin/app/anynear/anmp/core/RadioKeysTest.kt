@@ -60,7 +60,7 @@ class RadioKeysTest {
 
     @Test
     fun unsignedCirclePacketIsDropped() = runTest {
-        // Every member knows the circle key: without the signature anyone of them could write as Anna (audit 11.11.2026).
+        // Every member knows the circle key: without the signature anyone of them could write as Anna (ADR 0021).
         val anna = device(1)
         val h = AnmpRadio.hourOf(1_762_000_000L)
         val header = AnmpHeader(AnmpKind.CIRCLE, AnmpRadio.senderTag(AnmpRadio.deviceSecret(anna.deviceId), h), epoch = 0,
@@ -73,7 +73,7 @@ class RadioKeysTest {
     @Test
     fun previousCircleKeyOpensOnlyDuringTheGracePeriod() = runTest {
         // After a key change the previous key still opens packets sent before (grace period), then no more: a removed
-        // member keeps that key and must not write into the circle over radio for good (audit 11.11.2026).
+        // member keeps that key and must not write into the circle over radio for good (ADR 0021).
         val old = B64.encode(ByteArray(32) { (it + 9).toByte() })
         val at = 1_762_000_000_000L
         val packet = keys(1).circlePacket(AnmpKind.CIRCLE, circle("kreis-1", old), AnmpContent(id = ByteArray(8) { 3 }, ts = 1, text = "alt"))

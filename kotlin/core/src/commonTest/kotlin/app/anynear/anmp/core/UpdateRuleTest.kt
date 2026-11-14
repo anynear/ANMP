@@ -4,7 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
-/** Update rules in the radio list (Docs ADR 0096): minimum with mandatory lead time, unknown fields ignored. */
+/** Update rules in the radio list (ADR 0096): minimum with mandatory lead time, unknown fields ignored. */
 class UpdateRuleTest {
     private val from = 1_763_650_000_000
 

@@ -38,7 +38,7 @@ import kotlin.time.Clock
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * The core against the Go test relay of the private repository ANDP-Peer (internal/cmd/testrelay, in-memory relay over real TLS with
+ * The core against the Go test relay of the repository ANDP-Peer (internal/cmd/testrelay, in-memory relay over real TLS with
  * pinning, no SNI). One instance: the test relay has a fixed node key, so several instances cannot form one
  * network. Revocations are not checked by the Go test relay; that part is covered with the Kotlin fake (FakeNet).
  * Runs where `go` is installed (ANMP_REQUIRE_GO=1 makes a missing Go an error).

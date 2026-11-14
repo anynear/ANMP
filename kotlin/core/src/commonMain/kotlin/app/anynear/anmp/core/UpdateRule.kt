@@ -6,9 +6,10 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.longOrNull
 
 /**
- * When an old client build must stop (Docs ADR 0096, ANMP "Update rules"): block `app` (Android and iOS, build =
- * `versionCode` = `CURRENT_PROJECT_VERSION`, 2n or 2n+1 from the number of commits of the App repo) or `web` (the web app, build = number of commits of the Web repo). Set only when
- * needed, by a tag in the Network repo; absent means nothing is asked. The list only enforces; notices about new
+ * When an old client build must stop (ADR 0096, ANMP "Update rules"): block `app` (Android and iOS, build =
+ * `versionCode` = `CURRENT_PROJECT_VERSION`, 2n or 2n+1 from the number of commits of the app's repository) or `web` (the
+ * web app, build = number of commits of its repository). Set only when needed, by the network operator; absent means
+ * nothing is asked. The list only enforces; notices about new
  * versions come from the stores and updaters themselves.
  *
  * Builds below [min] must update from [from] (Unix milliseconds) on; until then they show a notice with the date.

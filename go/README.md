@@ -6,7 +6,7 @@ It does not need ANDP: the relay checks the radio list's head and signature, thi
 
 | Package | Content |
 |---|---|
-| `anmp` | frame and header (`Peek`, `EncodeHeader`), open packets `ask` and `patron` (`EncodeOpen`), sealed packets (`Encode`, `Decode`), exact size and radio budget (`Size`, `MaxTextBytes`, `FitsRadio`), radio rule (`Kind.Radio`), public form (`IsPublicForm`), channel PSK, radio secrets, sender and route tags per hour, chains, pickup windows and their tags, `pickup` with one-time keys (`PickupPacket`, `OpenPickup`), radio list content (`ParseRadioList`), spaces of the radio inbox |
+| `anmp` | frame and header (`Peek`, `EncodeHeader`), open packets `ask` and `patron` (`EncodeOpen`), sealed packets (`Encode`, `Decode`), exact size and radio budget (`Size`, `MaxTextBytes`, `FitsRadio`), radio rule (`Kind.Radio`), public form (`IsPublicForm`), signs of life and helpers' answers over radio (`Alive`, `Care`, `Valid`), channel PSK, radio secrets, sender and route tags per hour, chains, pickup windows and their tags, `pickup` with one-time keys (`PickupPacket`, `OpenPickup`), radio list content (`ParseRadioList`), spaces of the radio inbox |
 
 Kotlin (`kotlin/format`, `kotlin/core`) is the reference and writes the vectors; `go test ./...` checks every radio
 vector of `../vectors/anmp-v1.json` and all of `../vectors/anmp-v1-radio-list.json`.

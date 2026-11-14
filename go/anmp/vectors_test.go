@@ -522,3 +522,74 @@ func TestStats(t *testing.T) {
 		}
 	}
 }
+
+// Sign of life and a helper's answer over radio (ADR 0083): the same bytes as kotlin/format, signature, label budget
+// and the contents every reader rejects.
+func TestRadioAliveAndCare(t *testing.T) {
+	v := loadVectors(t, vectorsPath)
+	f := fixtures(t, v)
+	scope := v.str(t, "inputs.circleId")
+	hour := HourOf(vectorTs)
+	devSecret := must[[]byte](t)(DeviceSecret(f.deviceA))
+	circleSecret := must[[]byte](t)(CircleSecret(f.circleSecret))
+	circleRoute := RouteTag(circleSecret, hour)
+	signB := ed25519.NewKeyFromSeed(v.hex(t, "inputs.deviceBSignPrivate"))
+	bSender := SenderTag(must[[]byte](t)(DeviceSecret(f.deviceB)), hour)
+
+	aliveOf := func(label *string) *Alive {
+		return &Alive{Plan: f.messageID, State: AliveStart, Start: vectorTs, Until: vectorTs + 8*3600, Due: vectorTs + 900,
+			Hint: 300, Alarm: 600, Quiet: 900, Motion: true, Label: label, Battery: Int(80)}
+	}
+	ah := &Header{Kind: KindAlive, From: SenderTag(devSecret, hour), Epoch: Int(3), Route: circleRoute}
+	ac := &Content{ID: f.messageID, Ts: vectorTs, Alive: aliveOf(Str("Wandern"))}
+	eq(t, "radio.alivePacket.header", v.hex(t, "radio.alivePacket.header"), must[[]byte](t)(EncodeHeader(ah)))
+	eq(t, "radio.alivePacket.content", v.hex(t, "radio.alivePacket.content"), must[[]byte](t)(EncodeContent(ac)))
+	ap := must[*Encoded](t)(encode(ah, ac, scope, f.circleKey, f.signA, nonce(0x10)))
+	eq(t, "radio.alivePacket.packet", v.hex(t, "radio.alivePacket.packet"), ap.Packet)
+	eq(t, "radio.alivePacket.opened", v.hex(t, "radio.alivePacket.opened"), ap.Opened)
+	if !IsPublicForm(ap.Packet) || int64(len(ap.Packet)) != v.int(t, "radio.alivePacket.size") {
+		t.Error("radio.alivePacket size or public form")
+	}
+	am := must[*Message](t)(Decode(ap.Packet, scope, f.circleKey, WithKey(f.signA.Public().(ed25519.PublicKey)), true))
+	if am.Content.Alive == nil || !am.Content.Alive.Valid() || *am.Content.Alive.Label != "Wandern" || am.Content.Alive.Quiet != 900 {
+		t.Errorf("radio.alivePacket alive: %+v", am.Content.Alive)
+	}
+	if _, err := Decode(ap.Packet, scope, f.circleKey, WithKey(signB.Public().(ed25519.PublicKey)), true); err == nil {
+		t.Error("radio.alivePacket opens with another member's key")
+	}
+	label := MaxTextBytes(ah, true, func(s string) *Content { return &Content{ID: f.messageID, Ts: vectorTs, Alive: aliveOf(&s)} })
+	if int64(label) != v.int(t, "radio.alivePacket.labelBytes") {
+		t.Errorf("radio.alivePacket.labelBytes: %d", label)
+	}
+
+	ch := &Header{Kind: KindCare, From: bSender, Epoch: Int(3), Route: circleRoute}
+	cc := &Content{ID: unhex(t, "b0b1b2b3b4b5b6b7"), Ts: vectorTs + 60, Care: &Care{Plan: f.messageID, State: CareLooking}}
+	eq(t, "radio.carePacket.content", v.hex(t, "radio.carePacket.content"), must[[]byte](t)(EncodeContent(cc)))
+	cp := must[*Encoded](t)(encode(ch, cc, scope, f.circleKey, signB, nonce(0x11)))
+	eq(t, "radio.carePacket.packet", v.hex(t, "radio.carePacket.packet"), cp.Packet)
+	eq(t, "radio.carePacket.opened", v.hex(t, "radio.carePacket.opened"), cp.Opened)
+	cm := must[*Message](t)(Decode(cp.Packet, scope, f.circleKey, WithKey(signB.Public().(ed25519.PublicKey)), true))
+	if cm.Content.Care == nil || !cm.Content.Care.Valid() || cm.Content.Care.State != CareLooking {
+		t.Errorf("radio.carePacket care: %+v", cm.Content.Care)
+	}
+
+	for _, e := range v.at(t, "radio.invalidContent").([]any) {
+		o := e.(map[string]any)
+		if c, err := DecodeContent(unhex(t, o["content"].(string))); err == nil {
+			t.Errorf("radio.invalidContent %s accepted: %+v", o["name"], c)
+		}
+	}
+
+	bad := *aliveOf(nil)
+	bad.Alarm = 200 // before the hint
+	if bad.Valid() {
+		t.Error("alarm before hint is valid")
+	}
+	long := strings.Repeat("ä", AliveMaxLabel+1)
+	if (&Alive{Plan: f.messageID, State: 1, Start: 1, Until: 2, Due: 2, Hint: 1, Alarm: 1, Quiet: 60, Label: &long}).Valid() {
+		t.Error("label over 40 characters is valid")
+	}
+	if (&Care{Plan: f.messageID, State: 4}).Valid() {
+		t.Error("care state 4 is valid")
+	}
+}

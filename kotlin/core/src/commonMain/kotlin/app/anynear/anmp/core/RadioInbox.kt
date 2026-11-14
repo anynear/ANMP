@@ -19,7 +19,7 @@ import kotlinx.coroutines.sync.withLock
 class RadioInboxPacket(val packet: ByteArray, val ts: Long)
 
 /**
- * The radio inbox of ADR 0051: a ANDP space with a grant for anyone. Every entry is one radio packet in the public
+ * The radio inbox of ADR 0051: an ANDP space with a grant for anyone. Every entry is one radio packet in the public
  * form, unchanged. Writing is best effort without a queue (others hear the same packet and write it too); every
  * write uses a fresh writer key, so relays cannot link the uplinks of one device. Reading lists the space with one
  * cursor per relay and filters by route tag on the device. Route tags are those of the hour the entry was written.
@@ -116,7 +116,7 @@ internal class RadioInbox(
         private const val PAGE = 200
         private const val MAX_SEEN = 20_000
 
-        /** A ANMP packet over radio with a route tag (public form), not open, at most 233 bytes. */
+        /** An ANMP packet over radio with a route tag (public form), not open, at most 233 bytes. */
         fun isPublicForm(packet: ByteArray): Boolean = AnmpRadio.isPublicForm(packet)
 
         /** Space and grant from their wire forms; `null` if either is missing or invalid. */

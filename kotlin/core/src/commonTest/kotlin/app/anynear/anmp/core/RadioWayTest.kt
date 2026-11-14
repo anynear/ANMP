@@ -4,6 +4,8 @@ import app.anynear.andp.Grant
 import app.anynear.andp.GrantBody
 import app.anynear.andp.Rights
 import app.anynear.anmp.Anmp
+import app.anynear.anmp.AnmpAliveState
+import app.anynear.anmp.AnmpCareState
 import app.anynear.anmp.AnmpKind
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -49,7 +51,7 @@ class RadioWayTest {
 
     @Test
     fun radioRule() {
-        for (kind in listOf(AnmpKind.CIRCLE, AnmpKind.DIRECT, AnmpKind.REACT, AnmpKind.READ, AnmpKind.RECEIPT, AnmpKind.ASK, AnmpKind.PATRON, AnmpKind.PICKUP)) {
+        for (kind in listOf(AnmpKind.CIRCLE, AnmpKind.DIRECT, AnmpKind.REACT, AnmpKind.DELETE, AnmpKind.READ, AnmpKind.RECEIPT, AnmpKind.ALIVE, AnmpKind.CARE, AnmpKind.ASK, AnmpKind.PATRON, AnmpKind.PICKUP)) {
             assertTrue(kind.radio, "${kind.conv} over radio")
         }
         for (kind in listOf(AnmpKind.MEMBER, AnmpKind.META, AnmpKind.PROFILE, AnmpKind.WANT, AnmpKind.HAVE, AnmpKind.HISTORY, AnmpKind.LEFT, AnmpKind.REKEY, AnmpKind.REMOVED, AnmpKind.SYNC)) {
@@ -93,8 +95,73 @@ class RadioWayTest {
     }
 
     /**
+     * Signs of life and the helpers' answers go over radio like over the internet (ADR 0083 §7): with the relays down the
+     * helper still learns the plan, the owner sees that it arrived, and the answer comes back. Confirmations of a plan go
+     * over radio at most every 15 minutes; the end always.
+     */
+    @Test
+    fun shortLabelGoesAlongOverRadio() = world {
+        val a = device("Anna")
+        val b = device("Ben")
+        val circle = circleOf(a, b)
+        val air = FakeAir()
+        a.radio(air)
+        b.radio(air)
+        net.relays.forEach { it.offline = true }
+        val now = Clock.System.now().toEpochMilliseconds()
+        val plan = assertNotNull(a.core.startAlive(circle.id, "Wandern", until = now + 3_600_000L, quiet = AliveLogic.MIN_QUIET, motion = true))
+        b.await<CoreEvent.AliveChanged>(30.seconds) { it.planId == plan.id }
+        assertEquals("Wandern", b.core.aliveStatus(plan.id)?.plan?.label)
+        assertTrue(assertNotNull(b.core.aliveStatus(plan.id)).plan.motion)
+    }
+
+    @Test
+    fun signOfLifeAndCareOverRadio() = world {
+        val a = device("Anna")
+        val b = device("Ben")
+        val circle = circleOf(a, b)
+        val air = FakeAir()
+        a.radio(air)
+        b.radio(air)
+        net.relays.forEach { it.offline = true }
+
+        val now = Clock.System.now().toEpochMilliseconds()
+        val label = "Allein im Wald, zurück gegen sieben Uhr"
+        val plan = assertNotNull(a.core.startAlive(circle.id, label, until = now + 8 * 3_600_000L, quiet = AliveLogic.MIN_QUIET))
+        b.await<CoreEvent.AliveChanged>(30.seconds) { it.planId == plan.id }
+        val seen = assertNotNull(b.core.aliveStatus(plan.id))
+        assertEquals(a.info.personId, seen.plan.owner)
+        assertEquals(circle.id, seen.plan.circleId)
+        assertEquals(AnmpAliveState.START, seen.plan.state)
+        assertEquals(plan.due / 1000, seen.plan.due / 1000)
+        // The whole plan with this label does not fit into a radio packet: the label stays behind until the internet.
+        assertEquals("", seen.plan.label)
+        // Ben's radio receipt reaches Anna without internet (ADR 0083 §5.1).
+        eventually { a.core.aliveStatus(plan.id)?.plan?.heard?.any { it.person == b.info.personId } == true }
+        val sent = air.sent.count { (_, p) -> Anmp.peek(p)?.kind == AnmpKind.ALIVE }
+        assertEquals(1, sent)
+        assertTrue(air.sent.filter { (_, p) -> Anmp.peek(p)?.kind == AnmpKind.ALIVE }.all { (_, p) -> Anmp.fitsRadio(p) })
+
+        // A tap right after the start does not go over radio again.
+        assertTrue(a.core.confirmAlive(plan.id))
+        delay(500.milliseconds)
+        assertEquals(sent, air.sent.count { (_, p) -> Anmp.peek(p)?.kind == AnmpKind.ALIVE })
+
+        assertTrue(b.core.careAlive(plan.id, AnmpCareState.LOOKING))
+        eventually { a.core.aliveStatus(plan.id)?.plan?.care?.any { it.person == b.info.personId && it.state == AnmpCareState.LOOKING } == true }
+
+        assertTrue(a.core.endAlive(plan.id))
+        eventually { b.core.aliveStatus(plan.id)?.plan?.state == AnmpAliveState.END }
+
+        // Back online, the copies from the internet change nothing: the newer state stays.
+        net.relays.forEach { it.offline = false }
+        eventually { b.core.aliveStatus(plan.id)?.plan?.label == label }
+        assertEquals(AnmpAliveState.END, b.core.aliveStatus(plan.id)?.plan?.state)
+    }
+
+    /**
      * Ben is removed from the circle but still Anna's contact, so she knows his device. With the previous circle key he
-     * must not write into the circle over radio any more, neither as himself nor as Clara (audit 11.11.2026).
+     * must not write into the circle over radio any more, neither as himself nor as Clara (ADR 0021).
      */
     @Test
     fun removedMemberCannotWriteIntoTheCircleOverRadio() = world {

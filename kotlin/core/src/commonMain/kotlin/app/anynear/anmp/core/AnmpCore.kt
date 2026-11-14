@@ -150,7 +150,7 @@ class PreparedLink(
  * (ADR 0022), without UI and without platform code. Entry point for the app and (through `AnmpCoreWeb`) the web
  * client.
  *
- * Model (spec/anmp.md "Core on ANDP"): every circle is a ANDP space owned by everyone holding the circle secret;
+ * Model (spec/anmp.md "Core on ANDP"): every circle is an ANDP space owned by everyone holding the circle secret;
  * every installation owns a personal mailbox with a random owner key and hands out write grants (per contact,
  * per circle in the member announcement, `*` with a short expiry in the contact link). Packets lie as entries
  * (placement space, inside `AnmpEnvelope`), blobs as contents (placement object) referenced by `refs`.
@@ -207,7 +207,7 @@ class AnmpCore(
 
     /**
      * The newest radio list (ANDP §5.9): regions and communities (ADR 0054 §1b) and the update rules `app` and `web`
-     * (Docs ADR 0096). Fetched with the network list, kept across restarts and without internet.
+     * (ADR 0096). Fetched with the network list, kept across restarts and without internet.
      */
     val radioList: StateFlow<RadioList?> get() = net.radio
 
@@ -2813,11 +2813,13 @@ class AnmpCore(
     suspend fun careAlive(planId: String, careState: Int): Boolean = onCore {
         val plan = state.alive.firstOrNull { it.id == planId && it.owner != ownPersonId } ?: return@onCore false
         val ts = now()
-        val sent = postCircle(
-            plan.circleId, AnmpKind.CARE, content(id = messageIdOf(null), care = AnmpCare(B64.decode(planId), careState), ts = ts / 1000),
-            notify = true,
-        ) != null
-        if (sent) putCare(planId, AliveCare(ownPersonId, careState, ts))
+        val id = messageIdOf(null)
+        val care = AnmpCare(B64.decode(planId), careState)
+        val sent = postCircle(plan.circleId, AnmpKind.CARE, content(id = id, care = care, ts = ts / 1000), notify = true) != null
+        if (sent) {
+            putCare(planId, AliveCare(ownPersonId, careState, ts))
+            radio?.let { way -> cs.launch { runCatching { way.care(plan.circleId, id, ts / 1000, care) } } }
+        }
         return@onCore sent
     }
 
@@ -2846,6 +2848,8 @@ class AnmpCore(
         )
         val wake = !confirming || now >= plan.due
         postCircle(plan.circleId, AnmpKind.ALIVE, content(id = id, alive = wire, ts = now / 1000), notify = wake) ?: return null
+        // Also over radio, with the same message ID, so helpers without internet learn it (ADR 0083 §7).
+        radio?.let { way -> cs.launch { runCatching { way.alive(plan.circleId, id, now / 1000, wire) } } }
         val sent = next.copy(sentMids = (plan.sentMids + B64.encode(id)).takeLast(4), unconfirmed = plan.unconfirmed + 1)
         putPlan(sent)
         return sent
@@ -2865,25 +2869,46 @@ class AnmpCore(
 
     /**
      * A sign of life in [circle]: always of the sender's person; a plan stays with the person and circle of its first
-     * packet, and only newer packets replace the known state.
+     * packet, and only newer packets replace the known state. A packet without label (over radio, when it did not fit)
+     * keeps the known label. [receipt]: confirm it over the internet (over radio the radio way confirms it). `false` if
+     * the packet is invalid or belongs to another person or circle; a packet already known counts as valid.
      */
-    private suspend fun onAlive(circle: CircleState, fromDevice: String, person: String, mid: ByteArray?, ts: Long, a: AnmpAlive) {
-        if (!AliveLogic.valid(a)) return
+    private suspend fun onAlive(circle: CircleState, fromDevice: String, person: String, mid: ByteArray?, ts: Long, a: AnmpAlive, receipt: Boolean = true): Boolean {
+        if (!AliveLogic.valid(a)) return false
         val id = B64.encode(a.plan)
         val at = maxOf(ts * 1000, a.start * 1000)
         val known = state.alive.firstOrNull { it.id == id }
-        if (known != null && (known.circleId != circle.id || known.owner != person)) return
-        if (known != null && (at < known.lastAt || (at == known.lastAt && a.state == known.state))) return
+        if (known != null && (known.circleId != circle.id || known.owner != person)) return false
+        if (known != null && (at < known.lastAt || (at == known.lastAt && !replacesInSameSecond(a.state, known.state)))) {
+            // The same packet over the internet after the radio one, which had to leave the label behind.
+            a.label?.takeIf { it.isNotEmpty() && known.label.isEmpty() }?.let { putPlan(known.copy(label = it)) }
+            return true
+        }
         val confirming = a.state == AnmpAliveState.OK || a.state == AnmpAliveState.MOVING || a.state == AnmpAliveState.START
         val plan = AlivePlan(
-            id = id, circleId = circle.id, owner = person, label = a.label.orEmpty(), start = a.start * 1000, until = a.until * 1000,
+            id = id, circleId = circle.id, owner = person, label = a.label ?: known?.label.orEmpty(), start = a.start * 1000, until = a.until * 1000,
             due = a.due * 1000, hint = a.hint * 1000L, alarm = a.alarm * 1000L, quiet = a.quiet * 1000L, motion = a.motion,
             state = a.state.takeIf { it in AnmpAliveState.START..AnmpAliveState.TIMEOUT } ?: AnmpAliveState.OK, lastAt = at, receivedAt = now(),
             battery = a.battery?.coerceIn(0, 100), confirmedAt = if (confirming) at else known?.confirmedAt ?: at,
             care = known?.care.orEmpty(), heard = known?.heard.orEmpty(), sentMids = known?.sentMids.orEmpty(), unconfirmed = known?.unconfirmed ?: 0,
         )
         putPlan(plan)
-        if (person != ownPersonId) mid?.takeIf { it.size == Anmp.ID_BYTES }?.let { confirmReceipt(fromDevice, B64.encode(it), AnmpArrived.INTERNET) }
+        if (receipt && person != ownPersonId) mid?.takeIf { it.size == Anmp.ID_BYTES }?.let { confirmReceipt(fromDevice, B64.encode(it), AnmpArrived.INTERNET) }
+        return true
+    }
+
+    /**
+     * Whether a packet with [new] replaces the known [old] state although both carry the same second, e.g. the copy of
+     * a start over the internet after the end over radio: start never replaces another state, end and timeout are never
+     * replaced, between the states in between the one read last wins.
+     */
+    private fun replacesInSameSecond(new: Int, old: Int): Boolean {
+        fun rank(s: Int) = when (s) {
+            AnmpAliveState.START -> 0
+            AnmpAliveState.END, AnmpAliveState.TIMEOUT -> 2
+            else -> 1
+        }
+        return rank(new) > rank(old) || (rank(new) == 1 && rank(old) == 1 && new != old)
     }
 
     /** Answer of a helper; from any member of the circle of the plan. */
@@ -3831,6 +3856,10 @@ class AnmpCore(
     private suspend fun acceptAlert(l: Listed.Channel, meta: Meta, data: ByteArray, keep: Boolean): CoreEvent.Alert? {
         if (meta.placement != Placement.SPACE) return null
         val a = AnmpAlerts.open(data, l.readKey) ?: return null
+        if (!AnmpAlerts.isValidIn(a.body, channel(l.channelId)?.curated == true)) {
+            log.log("alert in channel ${l.channelId.take(8)}: regional keys outside a curated channel, dropped")
+            return null
+        }
         if (!ChannelRules.maySend(l.access.space, a.signer, meta)) {
             log.log("alert in channel ${l.channelId.take(8)}: sender not allowed, dropped")
             return null
@@ -3959,6 +3988,21 @@ class AnmpCore(
 
             override fun deleteEvent(conversation: Conversation, fromDevice: String, content: AnmpContent) =
                 this@AnmpCore.deleteEvent(conversation, fromDevice, content)
+
+            override suspend fun onAlive(circleId: String, fromDevice: String, mid: ByteArray?, ts: Long, alive: AnmpAlive): Boolean =
+                withContext(serial) {
+                    val circle = circle(circleId) ?: return@withContext false
+                    val person = this@AnmpCore.personOf(fromDevice)
+                    this@AnmpCore.onAlive(circle, fromDevice, person, mid, ts, alive, receipt = false) && person != ownPersonId
+                }
+
+            override suspend fun onCare(circleId: String, fromDevice: String, ts: Long, care: AnmpCare) = withContext(serial) {
+                circle(circleId)?.let { this@AnmpCore.onCare(it, this@AnmpCore.personOf(fromDevice), ts, care) } ?: Unit
+            }
+
+            override suspend fun onReceipt(fromDevice: String, mids: List<String>) = withContext(serial) {
+                onAliveReceipt(this@AnmpCore.personOf(fromDevice), mids)
+            }
 
             override suspend fun uplink(packet: ByteArray): Boolean = uplinkRadioPacket(packet)
 

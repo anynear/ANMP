@@ -108,7 +108,7 @@ internal class SpaceAccess(
     val cred: Credentials get() = Credentials(signer, grant)
     val name: String get() = space.toString()
 
-    /** Puts a ANMP packet into the envelope of this space. */
+    /** Puts an ANMP packet into the envelope of this space. */
     suspend fun seal(packet: ByteArray): ByteArray = requireNotNull(envelope) { "space without envelope" }.seal(packet, name)
 }
 

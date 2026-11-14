@@ -25,7 +25,8 @@ class StreamTest {
         eventually { b.core.streamStats.value.connects == 1 }
         delay(1.seconds)
         val out = assertNotNull(a.core.sendDirect(b.deviceId, "Über den Stream"))
-        b.await<CoreEvent.Message>(5.seconds) { it.mid == out.mid }
+        // 15 s like the other stream tests: on slow CI machines the message sometimes took longer than 5 s.
+        b.await<CoreEvent.Message>(15.seconds) { it.mid == out.mid }
         val st = b.core.streamStats.value
         assertEquals(1, st.connects, "$st")
         assertEquals(0, st.missed, "$st")

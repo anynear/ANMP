@@ -182,7 +182,7 @@ class MultiDeviceTest {
     }
 
     /**
-     * Two devices stolen at once (audit 11.11.2026, ADR 0042 §6): neither gets the new circle key; the store secret is
+     * Two devices stolen at once (ADR 0042 §6): neither gets the new circle key; the store secret is
      * new on every remaining device, files and passwords move over and the old spaces are emptied, so the thieves read
      * nothing there any more.
      */
@@ -229,7 +229,7 @@ class MultiDeviceTest {
 
     /**
      * Root key still on the phone, card made but not yet confirmed: the new person key must not land in a state space the
-     * thief can read (audit 11.11.2026). The state secret is new and the waiting card points to it.
+     * thief can read. The state secret is new and the waiting card points to it.
      */
     @Test
     fun renewingWithTheRootKeyAlsoRenewsTheStateSecret() = world {

@@ -316,7 +316,7 @@ object AnmpArrived {
 }
 
 /**
- * Attachment (ADR 0011): blob [id] (SHA-256 of the encrypted bytes, 32), blob [key], type (`jpg`, `pdf`, `m4a`),
+ * Attachment (ADR 0011): blob [id] (SHA-256 of the encrypted bytes, 32), blob [key], type (`jpg`, `pdf`, `m4a`, `file`),
  * name, size, dimensions, plaintext hash (first 16 bytes of SHA-256, finds equal content across uploads), voice length ms and auto transcript flag (ADR 0030).
  */
 @JsExport
@@ -348,7 +348,7 @@ class AnmpLink(
     @CborLabel(4) val image: AnmpAttachment? = null,
 )
 
-/** Picture: blob [id] (32), blob [key], [from] = space of the writer's personal mailbox (32), plaintext hash (16). */
+/** Picture: blob [id] (32), blob [key], [from] = space that holds the blob (32), plaintext hash (16). */
 @JsExport
 @Serializable
 class AnmpImage(
@@ -397,7 +397,7 @@ class AnmpHistoryPart(
     @CborLabel(5) val grant: ByteArray? = null,
 )
 
-/** New circle secret [key] with [epoch]; [removed] device, [why] (`remove`, `reset`, `left`), [circle] ID, [ts] ms. */
+/** New circle secret [key] with [epoch]; [removed] device, [why] (`remove`, `reset`, `left`, `device`), [circle] ID, [ts] ms. */
 @JsExport
 @Serializable
 class AnmpRekey(

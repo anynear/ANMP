@@ -51,7 +51,8 @@ class DeliveryPlanTest {
         a.core.queueRadioText(circle.id, null, out.mid, 1_700_000_000_000, "Doch nicht")
         eventually { a.store.getString(Transport.STORE_KEY).orEmpty().contains(""""tries":""") }
         a.core.cancelSend(out.mid)
-        assertTrue(a.store.getString(RadioQueue.KEY).orEmpty().isEmpty())
+        // The radio queue is written in the background; wait until it is empty instead of checking at once.
+        eventually { a.store.getString(RadioQueue.KEY).orEmpty().isEmpty() }
 
         // Both ways are back: nothing of it goes out.
         net.relays.forEach { it.offline = false }

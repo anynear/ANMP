@@ -35,6 +35,13 @@ class RadioListTest {
     }
 
     @Test
+    fun repeatedKey() {
+        // A repeated key anywhere rejects the whole list (ANDP §1), as ANDP's check of the head does.
+        assertFailsWith<Exception> { RadioList.parse(text.replace("\"issued\":", "\"issued\":1,\"issued\":")) }
+        assertFailsWith<Exception> { RadioList.parse(text.replace("\"channel0\":false", "\"channel0\":false,\"channel0\":true")) }
+    }
+
+    @Test
     fun regionAt() {
         val l = RadioList.parse(text)
         assertEquals("Hessen", l.regionAt(50.11, 8.68)?.name, "Frankfurt")

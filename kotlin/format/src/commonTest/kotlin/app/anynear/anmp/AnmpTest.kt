@@ -34,7 +34,7 @@ class AnmpTest {
         val keys = AnmpCircleKeys.derive(Fixtures.circleSecret)
         val packet = Anmp.encode(AnmpHeader(AnmpKind.CIRCLE, me.tag, epoch = 0), AnmpContent(id = messageId, ts = 1, text = "Bin gleich da"), "circle-1", keys.cipher, me)
 
-        assertTrue(Anmp.isPmp(packet))
+        assertTrue(Anmp.isAnmp(packet))
         val verify = AnmpVerifier.withKey(me.signKey)
         val msg = assertNotNull(Anmp.decode(packet, "circle-1", keys.cipher, verify, requireSignature = true))
         assertEquals(AnmpKind.CIRCLE, msg.header.kind)

@@ -14,7 +14,7 @@
 ; signed and carries the full sender.
 
 packet = [
-  h: bstr .cbor header,     ; in clear (over radio the channel key protects it, see spec/anmp.md)
+  h: bstr .cbor header,     ; in clear (over radio with hourly tags only, see spec/anmp.md "One radio channel")
   b: bstr,                  ; nonce(12) || AES-256-GCM(inner) || tag(16), AAD see below
 ]
 
@@ -50,7 +50,7 @@ device  = bstr .size 16     ; device ID
 hash    = bstr .size 16     ; plaintext hash: first 16 bytes of SHA-256 of the plaintext; finds the same
                             ; content across uploads. Not the blob ID.
 blob-id = bstr .size 32     ; SHA-256 of the encrypted blob bytes = ANDP object ID (ADR 0035 §11)
-space   = bstr .size 32     ; Ed25519 public key of a ANDP space (raw; the space name is its Base64url)
+space   = bstr .size 32     ; Ed25519 public key of an ANDP space (raw; the space name is its Base64url)
 
 kind = &(
   circle: 1, direct: 2, react: 3, read: 4, receipt: 5,
@@ -72,7 +72,7 @@ content = {
   ? 4 => tag,               ; reference: author of that message
   ? 5 => tstr,              ; emoji; "" = reaction withdrawn
   ? 6 => [* id],            ; message IDs of a read or delivery receipt
-  ; internet only from here, except 10 and 32 (ADR 0058)
+  ; internet only from here, except 10 and 32 (ADR 0058), 35 and 36
   ? 7 => tstr,              ; sender name
   ? 8 => bstr .size 32,     ; sender X25519 key
   ? 9 => bstr .size 32,     ; sender Ed25519 key; device ID derived from it, must match `from`
@@ -122,11 +122,11 @@ alive      = { 0 => id, 1 => uint, 2 => uint, 3 => uint, 4 => uint, 5 => uint, 6
 care       = { 0 => id, 1 => 1 / 2 / 3 }  ; looking, away, back
 ; circle, count, from, to (ms), parts
 history    = { 0 => tstr, 1 => uint, ? 2 => uint, ? 3 => uint, ? 4 => [* part] }
-; blob, blob key, personal mailbox space of the writer, SHA-256 of the plaintext,
+; blob, blob key, space that holds the blob, SHA-256 of the plaintext,
 ; 4: delete token from before ANDP 1, no longer written (ANDP deletes need the delete right),
 ; 5: ANDP grant {delete, grantee: new member, scope: part ID} (CBOR [body, sig])
 part       = { 0 => blob-id, 1 => bstr .size 32, 2 => space, 3 => bstr .size 32, ? 4 => bstr .size 32, ? 5 => bstr }
-; new circle secret, epoch, removed device, reason ("remove" / "reset" / "left"), circle, time (ms)
+; new circle secret, epoch, removed device, reason ("remove" / "reset" / "left" / "device"), circle, time (ms)
 rekey      = { 0 => bstr .size 32, 1 => uint, ? 2 => device, ? 3 => tstr, ? 4 => tstr, ? 5 => uint }
 ; epoch, circle, time (ms)
 removed    = { 0 => uint, ? 1 => tstr, ? 2 => uint }
@@ -141,7 +141,7 @@ removed    = { 0 => uint, ? 1 => tstr, ? 2 => uint }
 ;
 ; Signature (Ed25519 with the device key, ADR 0013):
 ;   over "anmp/v1/sig\n" || scope || "\n" || CBOR([h, c])
-;   always over the internet; over radio for circle messages and reactions, can be switched off (default on).
+;   always over the internet and for every circle packet over radio; never for direct packets over radio.
 ;
 ; scope binds the packet to its place and is not in the packet: the circle ID in a circle,
 ; the empty text for direct packets (personal mailbox, radio direct).
@@ -149,7 +149,7 @@ removed    = { 0 => uint, ? 1 => tstr, ? 2 => uint }
 ; Blobs (attachments, pictures, history parts): AES-256-GCM with a random key per blob, AAD "anmp/v1/att",
 ; ID = SHA-256 of nonce || ciphertext || tag. The receiver checks the hash before decrypting.
 ;
-; Envelope on ANDP: every packet stored as a ANDP entry is
+; Envelope on ANDP: every packet stored as an ANDP entry is
 ;   AES-256-GCM(envelope key, packet, AAD = "anmp/v1/env\n" || space), random nonce in front, tag at the end.
 ;   circle space:     HKDF(circle secret, "anmp/v1/env")
 ;   personal mailbox: HKDF(mailbox space public key, "anmp/v1/inbox") (one mailbox per person, ADR 0042;
@@ -159,8 +159,8 @@ removed    = { 0 => uint, ? 1 => tstr, ? 2 => uint }
 ; into that installation's personal mailbox. The recipient recognizes it by a header without fields 4/5
 ; and opens it like a radio packet.
 ;
-; Radio limit: 233 bytes packet (Meshtastic payload). Text in it (ASCII):
-;   circle message signed 94 bytes, unsigned 160 bytes, direct message 152 bytes.
+; Radio limit: 233 bytes packet (Meshtastic payload). Text in it (ASCII) in the public form (ADR 0051):
+;   circle message (signed) 83 bytes, direct message 152 bytes.
 
 ; Personal store entry (ADR 0041), sealed with HKDF(store secret, "anmp/v1/store-aead"), AAD "anmp/v1/store-aead".
 store-entry = { 0 => tstr, 1 => tstr, 2 => tstr, 3 => uint, 4 => blob-id, 5 => bstr .size 32, 6 => uint, 7 => uint, ? 8 => uint, ? 9 => uint, ? 10 => store-doc, ? 11 => tstr, ? 12 => uint, ? 13 => store-title }  ; 11: person ID of who put the file in (shared quota); 12: in the bin since, ms (ADR 0086); 13: title (ADR 0091)
@@ -223,7 +223,7 @@ alert-body   = {
   ? 11 => bool,              ; ended (only true is written)
   ? 12 => bstr .size 8,      ; key: incident, SHA-256("anmp/v1/alert-key" || key)[0:8]
 }
-; Channel link https://anynear.net/a#<b64u>
+; Channel link https://anynear.app/a#<b64u>
 channel-link = { 0 => 1, 1 => bstr .size 32, 2 => tstr, 3 => tstr, 4 => bstr .size 32, 5 => tstr, ? 6 => true, ? 7 => channel-join }
                                                    ; v, network, space, name, read key, read grant, curated, way to the owner
 channel-join = { 0 => bstr .size 16, 1 => bstr .size 32, 2 => space, 3 => bstr }

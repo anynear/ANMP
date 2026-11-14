@@ -10,13 +10,13 @@ import kotlin.js.JsExport
  * ANMP – anynear Message Protocol, version v1 (ADR 0021, 0034). One packet format for every path (internet,
  * radio). Spec: `spec/anmp.md`, `spec/anmp.cddl`; vectors: `vectors/anmp-v1.json`.
  *
- * Packet: `50 4D 01` + CBOR `[h, b]`. `h` is the CBOR [AnmpHeader] in clear, `b` is AES-256-GCM over the CBOR
+ * Packet: `41 4E 01` + CBOR `[h, b]`. `h` is the CBOR [AnmpHeader] in clear, `b` is AES-256-GCM over the CBOR
  * array `[c]` or `[c, s]` with AAD [aad]. `c` is the CBOR [AnmpContent], `s` the Ed25519 signature over
  * [signingBytes]. The scope binds a packet to its place (circle ID, or `""` for direct) and is not in the packet.
  */
 @JsExport
 object Anmp {
-    /** "PM", version v1. */
+    /** "AN", version v1. */
     val MAGIC = byteArrayOf(0x41, 0x4E, 0x01)
 
     /** ANMP tag of an app installation: first 8 bytes of the device ID. */
@@ -170,8 +170,12 @@ object Anmp {
         return AnmpMessage(header, content, signed = signature != null, opened = cbor.encodeToByteArray(Opened.serializer(), o))
     }
 
-    /** `true` if [packet] starts like a ANMP packet (before decoding). */
-    fun isPmp(packet: ByteArray): Boolean = packet.size > MAGIC.size && MAGIC.indices.all { packet[it] == MAGIC[it] }
+    /** `true` if [packet] starts like an ANMP packet (before decoding). */
+    fun isAnmp(packet: ByteArray): Boolean = packet.size > MAGIC.size && MAGIC.indices.all { packet[it] == MAGIC[it] }
+
+    /** Former name of [isAnmp]; kept until the apps use [isAnmp]. */
+    @Deprecated("Use isAnmp.", ReplaceWith("isAnmp(packet)"))
+    fun isPmp(packet: ByteArray): Boolean = isAnmp(packet)
 
     fun fitsRadio(packet: ByteArray): Boolean = fitsRadioSize(packet.size)
 
@@ -225,7 +229,7 @@ object Anmp {
     private fun bstrSize(n: Int) = headSize(n) + n
 
     private fun parse(packet: ByteArray): Pair<Packet, AnmpHeader>? {
-        if (!isPmp(packet)) return null
+        if (!isAnmp(packet)) return null
         val p = runCatching { cbor.decodeFromByteArray(Packet.serializer(), packet.copyOfRange(MAGIC.size, packet.size)) }.getOrNull() ?: return null
         return p to (header(p.h) ?: return null)
     }

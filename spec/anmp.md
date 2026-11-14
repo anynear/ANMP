@@ -9,16 +9,16 @@ Schema: [`anmp.cddl`](anmp.cddl). Test vectors: [`../vectors/anmp-v1.json`](../v
 Reference implementation: `kotlin/format` (package `app.anynear.anmp`); the radio part also in Go
 (`go/anmp`, module `github.com/anynear/ANMP/go`, for a radio bridge in a relay).
 
-Status: version v1, in use in the anynear apps since November 2026. Not independently audited. What v1 protects and
-what it does not is in [Security considerations](#security-considerations). ANMP stores its packets in ANDP (anynear
+Status: version v1, in use in the anynear apps since November 2026. What v1 protects and what it does not is in
+[Security considerations](#security-considerations). ANMP stores its packets in ANDP (anynear
 Distributed Protocol, repository `anynear/ANDP`); "ANDP §n" refers to that specification. "ADR nnnn" refers to an
 internal decision record of the project; the records are not part of this repository, and every rule that follows
 from one is stated here in full.
 
-ANMP v1 is the successor of PMP 1, the format of the app under its earlier name PYRSA (ADR 0061 decision 5): same structure, new values (magic `41 4E 01`, alerts
-`41 41 01`, device address records `41 49 01`, HKDF salt `anmp`, infos `anmp/v1/…`, radio channel `anynear`).
+ANMP v1 replaced the format of an earlier version of the app (ADR 0061 decision 5): same structure, new values (magic `41 4E 01`, alerts
+`41 41 01`, device address records `41 49 01`, HKDF salt `anmp`, labels `anmp/v1/…`, radio channel `anynear`).
 Version v1 constants never change; apps update, they are not reinstalled (ADR 0061 decision 13). An incompatible
-change gets `anmp/v2/…` and a new ADR, and runs next to v1 until no app in use speaks only v1.
+change gets `anmp/v2/…` and runs next to v1 until no app in use speaks only v1.
 
 ## Conventions
 
@@ -74,7 +74,7 @@ Wrong lengths of fields 1, 2, 4, 5, 6, 8 make the packet invalid. Which path set
 | radio, circle message and circle reaction | 0, 1 (sender tag), 3, 6 |
 | radio, direct, direct reaction, read receipt, receipt | 0, 1 (sender tag), 6 |
 | radio, ask | 0, 1 (sender tag), 7 |
-| radio, patron | 0, 1 (sender tag), 4 (one-time key of the patron) |
+| radio, patron | 0, 1 (sender tag), 4 (one-time key of the patron), 9 (optional) |
 | radio, pickup | 0, 1 (sender tag), 2 (first 8 bytes of the patron's one-time key), 4 (one-time key of the asker), 10 |
 
 Over radio field 1 is the hourly sender tag, never the ANMP tag, and field 2 is never set (ADR 0051).
@@ -118,8 +118,7 @@ All fields are optional; which are set depends on the kind.
 | 27 | personRef | [n, seq] | state of the sender's key chain (certificate number, list number) | no |
 | 28 | circle | tstr | circle ID of a read state for the own other devices | no |
 | 29 | sync | sync | snapshot for the own other devices (kind sync) | no |
-| 30 | keys | own-data | 0 topic tstr · 1 [* part] · 2 ts ms? |
-| sync-keys | new private keys of the person for the own other devices (kind sync) | no |
+| 30 | keys | sync-keys | new private keys of the person for the own other devices (kind sync) | no |
 | 31 | ownData | own-data | data of the app for the own other devices (kind sync) | no |
 | 32 | arrived | uint | receipt: paths the confirmed messages arrived on, bit 0 internet, bit 1 radio; missing = not said (ADR 0058) | yes |
 | 33 | channel | channel-ref | channel of a subscribe, unsubscribe or channel key (ADR 0062 §11) | no |
@@ -140,7 +139,7 @@ Structures (see CDDL for types):
 | care | 0 plan (ID 8) · 1 state (1 looking, 2 away, 3 back) |
 | history | 0 circle · 1 count · 2 from ms? · 3 to ms? · 4 [* part]? |
 | part | 0 id (blob ID, 32) · 1 key 32 · 2 from (space, 32) · 3 SHA-256 of the plaintext 32 · 4 delete token 32? (pre-ANDP, no longer written) · 5 grant? (ANDP delete grant scoped to the part) |
-| rekey | 0 key 32 · 1 epoch · 2 removed device 16? · 3 why (`remove`/`reset`/`left`)? · 4 circle? · 5 ts ms? |
+| rekey | 0 key 32 · 1 epoch · 2 removed device 16? · 3 why (`remove`/`reset`/`left`/`device`)? · 4 circle? · 5 ts ms? |
 | removed | 0 epoch · 1 circle? · 2 ts ms? |
 | sync | 0 ts ms · 1 name? · 2 [* sync-circle] · 3 [* sync-contact] · 4 [* gone] · 5 [* sync-channel]? |
 | sync-circle | 0 id · 1 name · 2 secret 32 · 3 epoch? · 4 epochTs ms? · 5 epochBy 16? |
@@ -151,6 +150,7 @@ Structures (see CDDL for types):
 | channel-ref | 0 space (tstr) · 1 hash of the held read grant 32? (subscribe) · 2 new read key 32? · 3 new read grant (wire form)? · 4 owner signature 64? (channel key) |
 | sync-ingress | 0 token 32 · 1 label? · 2 created ms? · 3 sender seed 32 · 4 sender grant (wire form) · 5 record entry ID? |
 | sync-keys | 0 person key seed 32 · 1 mailbox owner seed 32 · 2 store secret 32? · 3 state secret 32? |
+| own-data | 0 topic · 1 [* part] · 2 ts ms? |
 
 `ts` is in seconds; `imageTs`, `meta`, `rekey` and `removed` use milliseconds.
 
@@ -167,7 +167,8 @@ random blob IDs.
 ## Kinds
 
 An internet packet always carries content fields 1, 7, 8, 9 (and 10 if there is a node) and is always signed.
-Over radio only fields 0–6 are used, plus 10 in circle and direct messages and 32 in receipts (ADR 0058).
+Over radio only fields 0–6 are used, plus 10 in circle and direct messages, 32 in receipts (ADR 0058) and 35 and 36
+in alive and care.
 
 - **Node over radio:** the sender adds its node (field 10) to a circle or direct message only if the packet still fits
   with it; otherwise it goes without, so the text budget below stays the same. The receiver takes it for the sender's
@@ -175,7 +176,7 @@ Over radio only fields 0–6 are used, plus 10 in circle and direct messages and
   a patron that carries a packet on sends it under its own node (ADR 0051).
 - **Answer (ADR 0092):** a circle or direct message may carry field 3 (ID of the message it answers) and field 4 (tag of
   that message's installation), always both. No quoted text goes along: readers look the message up themselves and show
-  „message not available“ if they do not have it. Over radio the reference goes along only if the packet still fits
+  "message not available" if they do not have it. Over radio the reference goes along only if the packet still fits
   with it, before field 10; the text budget below stays the same. Readers that do not know answers show the message
   without it.
 - **Path in receipts:** a receipt says in field 32 on which path the messages arrived at the receiver, independent of
@@ -231,7 +232,8 @@ circle of the first packet readers saw; packets of the same plan ID from another
 are implausible ones (wrong plan ID length, `due` outside `start`…`until`, `alarm` < `hint`, `alarm` > 1 day,
 `quiet` < 60 s or > 1 day, plan longer than 400 days, label > 40). Every packet carries the whole plan, so a reader that
 missed the start still knows it; the packet with the newer sender time (field 1, then field 2 of the plan) replaces
-the known state. Field 0 is a fresh message ID; the start's message ID is the plan ID. States:
+the known state. Within the same second, start never replaces another state, end and timeout are never replaced, and
+between the other states the packet read last wins. Field 0 is a fresh message ID; the start's message ID is the plan ID. States:
 
 | State | Meaning |
 |---|---|
@@ -245,15 +247,21 @@ the known state. Field 0 is a fresh message ID; the start's message ID is the pl
 
 Unknown states are read as `ok`. Times are seconds by the sender's clock. Readers that are members (helpers) confirm
 receipt like a circle message (kind receipt to the sender's person). Helpers judge on their own, without a server:
-after `due` + `hint` without a newer packet a hint, after `due` + `alarm` an alarm; reason „missed“ if the last state
-is 4, otherwise „unreachable“. A helper whose latest care is „away“ gets neither. Start, missed, battery, end,
+after `due` + `hint` without a newer packet a hint, after `due` + `alarm` an alarm; reason "missed" if the last state
+is 4, otherwise "unreachable". A helper whose latest care is "away" gets neither. Start, missed, battery, end,
 timeout and a confirmation after `due` wake the readers; other confirmations do not. The sender sends at most one
 packet per `quiet` / 2 for movement, and `quiet` is at least 15 minutes when it is set by the core (radio budget).
+Over radio (public form, signed like every circle packet) a packet goes with the same message ID and time as over the
+internet, so readers merge both. Confirmations (ok, moving) of a plan go over radio at most once per 15 minutes, the
+other states always. If the whole plan does not fit, field 9 (label) stays behind; readers keep the label they know
+and take it from the internet copy of the same packet. A helper confirms a sign of life heard over radio with a
+receipt over radio. A care goes over radio like an alive packet.
 
-**Care** (ADR 0083 §4, §5.3): a member answers the sign of life `plan` of the same circle: 1 „Ich schaue nach“,
-2 „Ich kann gerade nicht“ (away, no hint or alarm for this member), 3 back. Per person the newer answer wins; within
+**Care** (ADR 0083 §4, §5.3): a member answers the sign of life `plan` of the same circle: 1 looking ("I'll check"),
+2 away ("I can't right now": no hint or alarm for this member), 3 back. Per person the newer answer wins; within
 the same second the one read last. Looking counts only if it is not older than the last sign of life. Wakes the
 readers.
+
 **Hold** (ADR 0088): a receipt entry that carries the `refs` to the contents of a message without expiry, with the
 contents' expiry, so that they count on the space's quota only while they live. It is written after the contents and
 before the message, sealed like the message, with a fresh random ID in field 0. Readers drop it; it never goes over
@@ -273,8 +281,8 @@ moving it to another recipient.
 | Path | Signature | Check on receipt |
 |---|---|---|
 | internet, all kinds | always | required. `signKey` (content 9) must give a device ID whose tag is `from` and, if present, equal to header 5; X25519 from content 8 and header 4 must be equal |
-| radio, circle message, reaction and withdrawal | always | required. Key from the member directory of this circle by tag; a sender that is no member of the circle, a missing or a wrong signature makes the packet invalid |
-| radio, direct, direct reaction, read receipt | never | none; the device pair key proves the sender |
+| radio, every circle kind (message, reaction, delete, alive, care) | always | required. Key from the member directory of this circle by the sender tag; a sender that is no member of the circle, a missing or a wrong signature makes the packet invalid |
+| radio, direct kinds (message, reaction, delete, read receipt, receipt) | never | none; the device pair key proves the sender |
 
 ## Persons and devices (ADR 0042)
 
@@ -338,7 +346,7 @@ derived from that seed and an ID derived from the mailbox space (see [Key deriva
 
 ## Envelope on ANDP
 
-Every ANMP packet stored as a ANDP entry is wrapped in an envelope, so that relays never see the ANMP header
+Every ANMP packet stored as an ANDP entry is wrapped in an envelope, so that relays never see the ANMP header
 (kind, tags, sender keys):
 
 ```
@@ -404,8 +412,9 @@ flowchart LR
 | blob | random 32-byte key per blob; AEAD with AAD `anmp/v1/att`; ID = SHA-256(sealed bytes). The receiver checks the hash, then decrypts |
 
 **Old radio channels.** ANMP has no circle channels; all radio traffic runs on the channel `anynear` (ADR 0051).
-Apps remove the channels of earlier apps when they find them on a radio: `PYRSA`, `PYRSA-` followed by 5 characters
-of `ABCDEFGHJKLMNPQRSTUVWXYZ23456789`, and `PINA`/`PINA-…` (ADR 0061 decision 6).
+Apps remove the radio channels of earlier versions of the app when they find them on a radio: the channel named by
+`AnmpInfo.LEGACY_RADIO_CHANNEL_NAME` and the circle channels recognized by `AnmpKeys.isLegacyChannelName` (prefix
+`AnmpInfo.CHANNEL_PREFIX` followed by 5 characters of `ABCDEFGHJKLMNPQRSTUVWXYZ23456789`; ADR 0061 decision 6).
 
 ## Radio budget
 
@@ -417,14 +426,17 @@ size = 3 + 1 + bstr(|h|) + bstr(1 + bstr(|c|) + [bstr(64)] + 28)
 bstr(n) = n + (1 if n < 24, 2 if n < 256, 3 if n < 65536, else 5)
 ```
 
-Text left with a message ID and a time (ASCII; umlauts count 2 bytes, emojis 4):
+Text left with a message ID and a time, for a header with fields 0, 1 and 3 only (vectors `radioBudget`; ASCII,
+umlauts count 2 bytes, emojis 4):
 
 | Message | Text bytes |
 |---|---|
-| circle message (always signed) | 94 |
+| circle message (signed) | 94 |
 | direct message | 152 |
 
-Meshtastic PKI on direct packets may take more; open until the hardware test (ADR 0021).
+Over radio packets always use the public form, whose route tag leaves less text; see the budget in
+[One radio channel](#one-radio-channel). Meshtastic PKI on direct packets may take more room; this has not been
+measured.
 
 ## Receipt
 
@@ -443,7 +455,7 @@ order is by the sender's `ts`.
 ## Core on ANDP
 
 The core (`kotlin/core`, package `app.anynear.anmp.core`) keeps ANMP packets and blobs in ANDP version v1
-(Docs ADR 0035, ANDP `spec/andp.md`). This section is normative for interoperability between ANMP clients
+(ADR 0035, ANDP `spec/andp.md`). This section is normative for interoperability between ANMP clients
 (app, web); ANDP itself knows nothing of it.
 
 ### Spaces
@@ -462,7 +474,7 @@ The core (`kotlin/core`, package `app.anynear.anmp.core`) keeps ANMP packets and
 
 | `placement: space` (entries) | `placement: object` (contents) |
 |---|---|
-| every ANMP packet: circle, direct, react, read, receipt, member, meta, profile, want, have, history, left, rekey, removed; forwarded radio packets (ADR 0022) | attachments, pictures, voice messages, history parts |
+| every ANMP packet: circle, direct, react, read, receipt, member, meta, profile, want, have, history, left, rekey, removed, sync, subscribe, unsubscribe, channel-key, delete, alive, care, hold; forwarded radio packets (ADR 0022) | attachments, pictures, voice messages, history parts |
 
 - **Entry bytes** = `AnmpEnvelope` of the packet for the space (see [Envelope on ANDP](#envelope-on-andp)).
   **Content bytes** = the sealed blob (`nonce ‖ ciphertext ‖ tag`, AAD `anmp/v1/att`); its ANDP object ID is the blob ID.
@@ -475,11 +487,11 @@ The core (`kotlin/core`, package `app.anynear.anmp.core`) keeps ANMP packets and
 - **Message IDs:** an app that also sends a message over radio chooses its ID (content field 0) itself and passes it
   to the core (`sendCircle`/`sendDirect` with `mid`), so the message has the same ID on every path and receivers
   recognize it as one (see [Receipt](#receipt)).
-- **Expiry (ADR 0088):** circle, direct, react, delete, member, meta, profile, left, rekey, removed and forwarded radio
-  packets have `until = 0` (no expiry). Their contents get `until` = now + 30 days, capped by the relay's `max_until`;
-  such an entry carries no `refs`, a `hold` entry in the same space carries them with the contents' expiry. read,
-  receipt, sync, subscribe, unsubscribe and channel-key get now + 30 days (capped) like their contents; want, have
-  and history indexes 7 days. Revocations have `until = 0` (they must outlive the grant).
+- **Expiry (ADR 0088):** circle, direct, react, delete, member, meta, profile, left, rekey and removed packets, also
+  when forwarded from radio, have `until = 0` (no expiry). Their contents get `until` = now + 30 days, capped by the
+  relay's `max_until`; such an entry carries no `refs`, a `hold` entry in the same space carries them with the
+  contents' expiry. read, receipt, sync, subscribe, unsubscribe, channel-key, alive and care get now + 30 days
+  (capped) like their contents; want, have and history indexes 7 days. Revocations have `until = 0` (they must outlive the grant).
 - **Expired contents:** a reader that finds a content gone asks for it by its plaintext hash with `want` in the
   conversation (ADR 0014); a device that still has it puts it again as a new content and answers with `have` (7 days).
   This also serves new members and restored devices that read messages older than the contents.
@@ -516,7 +528,7 @@ The core (`kotlin/core`, package `app.anynear.anmp.core`) keeps ANMP packets and
   The device list names the mailbox (field 4). Readers also open entries sealed with the earlier envelope key
   (owner X25519) and use it towards a device whose app sends no key chain.
 - **Key chain in packets:** `member`, `profile`, `direct` and `sync` carry the proof (content 25), every internet packet
-  carries `personRef` (content 27). A reader checks the sender (spec "Persons and devices"), takes a newer chain, forgets
+  carries `personRef` (content 27). A reader checks the sender ([Persons and devices](#persons-and-devices-adr-0042)), takes a newer chain, forgets
   removed or revoked devices and, if the person is its contact, adds its new devices as contacts and sends each a
   `profile` with a personal grant.
 - **Direct to a person:** one `direct` per device of the recipient's list into its mailbox, each with the device pair
@@ -590,7 +602,8 @@ state space, so the profile comes back with the emergency card.
 - **Recovery code** R: 16 random bytes, written as 26 Crockford base32 characters (`0123456789ABCDEFGHJKMNPQRSTVWXYZ`,
   most significant bit first, the first character carries 3 bits) plus a check character (R as a number mod 37, check
   alphabet with `*~$=U` appended), in groups of four. Readers accept lower case, `O` for 0, `I`/`L` for 1, spaces and dashes.
-- **Kern-space:** owner = Ed25519 seed HKDF(R, `anmp/v1/core-sign`); one entry without expiry, AES-256-GCM with
+- **Kern-space** ("Kern" is German for core, hence the labels `anmp/v1/core-…`): owner = Ed25519 seed
+  HKDF(R, `anmp/v1/core-sign`); one entry without expiry, AES-256-GCM with
   HKDF(R, `anmp/v1/core-aead`), AAD `anmp/v1/core-aead`, over `{0 root key seed 32, 1 state secret S 32, 2 ts ms}`; the newest
   `ts` wins. The root key lies nowhere else once the person confirmed the code (typed it once).
 - **State space:** owner = Ed25519 seed HKDF(S, `anmp/v1/state-sign`); entry key HKDF(S, `anmp/v1/state-aead`), AAD the same,
@@ -674,8 +687,8 @@ hand-over list still follows the network.
 
 ### Personal store (ADR 0041)
 
-"Meine Ablage": files of one identity that stay on the relays **without expiry** (`until = 0`, ANDP §3 rule 4),
-within the relays' space quota (`quota_space_bytes`). Nothing of it is a ANMP packet.
+"Meine Ablage" (my files) in the app: files of one identity that stay on the relays **without expiry** (`until = 0`, ANDP §3 rule 4),
+within the relays' space quota (`quota_space_bytes`). Nothing of it is an ANMP packet.
 
 - **Space:** owner = Ed25519 seed HKDF(store secret, `anmp/v1/store-sign`). Only the identity holds the store secret;
   it is not derivable from any public key, so nobody can tell from a contact card that a store exists. No grants.
@@ -727,7 +740,7 @@ within the relays' space quota (`quota_space_bytes`). Nothing of it is a ANMP pa
 
 ### Circle store (ADR 0049)
 
-"Kreis-Ablage": files of a circle that stay on the relays without expiry, built exactly like the
+"Kreis-Ablage" (circle files) in the app: files of a circle that stay on the relays without expiry, built exactly like the
 [personal store](#personal-store-adr-0041) with two differences:
 
 - **Space and keys** come from the circle secret: owner = Ed25519 seed HKDF(circle secret, `anmp/v1/circle-store-sign`),
@@ -740,12 +753,12 @@ within the relays' space quota (`quota_space_bytes`). Nothing of it is a ANMP pa
   one already has. Deleting deletes in both. A removed member keeps what it already had, but sees nothing put after
   the change.
 
-Content, entry, change and delete are as in the personal store. Nothing of it is a ANMP packet; there is no line in
+Content, entry, change and delete are as in the personal store. Nothing of it is an ANMP packet; there is no line in
 the chat for a change.
 
 ### Deleting everything (ADR 0046)
 
-Before an installation deletes itself together with the person ("Alle Daten löschen"), the core removes the person
+Before an installation deletes itself together with the person ("Alle Daten löschen", delete all data, in the app), the core removes the person
 from the network, only if a holder of the personal store answers (otherwise nothing changes):
 
 1. Lists the entries of the own mailbox and the contents they refer to.
@@ -798,7 +811,7 @@ a relay answering again or a new network list end the wait at once, at the same 
 
 ### Channels (ADR 0062)
 
-A channel is a ANDP space whose owner key only the owner holds (format: [Alerts and channels](#alerts-and-channels-adr-0062)).
+A channel is an ANDP space whose owner key only the owner holds (format: [Alerts and channels](#alerts-and-channels-adr-0062)).
 Entries are alert packets `AA\x01` without envelope; attachments are contents in the same space, written by the same
 writer, sealed as blobs (refs as for every entry).
 
@@ -877,7 +890,7 @@ the device pair key of the sender known by its tag, without signature.
 ## One radio channel
 
 ADR 0051. All anynear radio traffic runs on one secondary channel named `anynear` with the public PSK above. Apps remove
-the channel `PYRSA` and the per-circle channels `PYRSA-xxxxx` of the PYRSA app (ADR 0061 decision 6). The PSK protects nothing: only the content is
+the channels of earlier versions of the app ([Old radio channels](#key-derivation-and-identifiers)). The PSK protects nothing: only the content is
 confidential (circle key or device pair key, unchanged).
 
 **Hours.** hour = floor(Unix seconds / 3600). Senders use the current hour. Receivers accept the previous, the
@@ -918,7 +931,7 @@ they received themselves. Timing, limits and listen-before-talk: ADR 0051.
 
 ## Alerts and channels (ADR 0062)
 
-A channel carries **alerts** ("Meldungen"): one owner, any number of senders, readers that nobody sees. An alert is
+A channel carries **alerts** ("Meldungen" in the app): one owner, any number of senders, readers that nobody sees. An alert is
 not an ANMP packet `AN\x01` but its own packet `AA\x01`, because it is sealed to a public key and machines (the
 relay's device address) must be able to make one. Reference implementation: `AnmpAlerts` in `kotlin/format`.
 This section is the contract for all implementations.
@@ -929,7 +942,7 @@ This section is the contract for all implementations.
 |---|---|
 | owner key | random Ed25519 seed, only at the owner; space = b64u(public key). The owner is also a sender (writes as owner, without grant) |
 | read key | random X25519 pair; the private part is in the channel link |
-| read grant | by the owner, `rights = read\|list`, no grantee (`*`), `until` 4102444800 (1.1.2100); in the channel link |
+| read grant | by the owner, `rights = read\|list`, no grantee (`*`), `until` 4102444800 (1 January 2100); in the channel link |
 | sender key | one Ed25519 pair per sender, with a write grant by the owner, grantee = sender, `until` 4102444800. The grants are the sender list signed by the owner; revoked with ANDP §4.3 |
 
 **Body** (CBOR map, integer keys ascending, defaults omitted, definite lengths as in packets):
@@ -981,7 +994,7 @@ key, checks the signature and the body; who may send is decided by the [channel 
 | 6 | curated (bool, only when true) |
 | 7 | join: way to announce oneself to the owner, only in links of own channels (ADR 0062 §11): CBOR `{0 owner device (bstr 16), 1 its X25519 key (bstr 32), 2 its mailbox (bstr 32), 3 write grant (bstr, CBOR [body, sig])}` |
 
-**Device address** ("Adresse für Geräte", ADR 0062 §4). Token = 32 random bytes; text form b64u (43 characters);
+**Device address** ("Adresse für Geräte" in the app, ADR 0062 §4). Token = 32 random bytes; text form b64u (43 characters);
 URL `https://alerts.anynear.app/<token>`. All derivations take the **32 raw token bytes** as HKDF input:
 
 ```
@@ -997,8 +1010,8 @@ record right after the old one, often in the same second). The channel owner wri
 derives space and key from the token, takes the newest valid entry of the owner, builds and signs the alert with the
 sender seed, seals it to the read key and writes contents and alert into the channel space as the sender (writer =
 sender, grant = sender grant). Revoking: the owner deletes the entry (tombstone) and revokes the sender grant.
-The HTTP interface of the device address (fields, encodings, Alertmanager) is the relay's business: Docs
-`adr/0062-meldungen-und-kanaele.md` §4. A `key` given there becomes field 12 of the body as hashed above.
+The HTTP interface of the device address (fields, encodings, Alertmanager) belongs to the relay and is not part of
+ANMP (ADR 0062 §4). A `key` given there becomes field 12 of the body as hashed above.
 
 ## Client level
 
@@ -1033,15 +1046,15 @@ content is defined here. Nothing of it is built into the app.
 - Unknown fields are ignored. A region or community that is invalid, or names a preset the app does not know, is
   skipped; the rest of the list counts (ADR 0061 decision 13).
 - The app picks the region on the phone: the first region whose area contains its rough position. The position never
-  leaves the phone. Outside all regions, or without a list, the radio profile of ADR 0006 applies and no community
-  channels are offered.
+  leaves the phone. Outside all regions, or without a list, the app's default radio settings apply (ADR 0006) and no
+  community channels are offered.
 - The last accepted list is kept and stays valid without internet.
 
-### Update rules (Docs ADR 0096)
+### Update rules (ADR 0096)
 
 The radio list may carry two optional blocks, `app` for the apps (Android and iOS) and `web` for the web app. They
-only enforce: notices about new versions come from the stores and updaters themselves. The Network repo sets them only
-when an old build has to go; without them nothing is asked.
+only enforce: notices about new versions come from the stores and updaters themselves. The network operator sets them
+only when an old build has to go; without them nothing is asked.
 
 ```json
 "app": {"min": 1200, "from": 1763650000000},
@@ -1054,12 +1067,12 @@ when an old build has to go; without them nothing is asked.
 | `from` | Unix milliseconds; required (the lead time is mandatory) |
 
 - The build of the apps is Android `versionCode` = iOS `CURRENT_PROJECT_VERSION` (`2n` for a build, `2n+1` for a tag,
-  `n` the number of commits of `main` in the App repo); the build of the web app is the number of commits of `main` in
-  the Web repo. A build of 0 or less (local builds) is never asked.
+  `n` the number of commits on the main branch of the app's repository); the build of the web app is the number of
+  commits on the main branch of its repository. A build of 0 or less (local builds) is never asked.
 - A block counts only if both fields are positive integers; otherwise it is ignored. Unknown fields are ignored.
 - Result per build and device clock: `none`, `soon` (below `min`, before `from`) or `required` (below `min`, from
   `from` on). `required` covers the interface only; the core, notifications, radio and life signs keep running, and
-  saving a backup stays reachable. The app blocks only if there is a way to update (Docs ADR 0096 §6).
+  saving a backup stays reachable. The app blocks only if there is a way to update (ADR 0096 §6).
 - The core fetches the radio list with the network list from the active relays and keeps the newest valid one
   (`AnmpCore.radioList`, `UpdateRule.demand`; web: `AnmpCoreWeb.webUpdate`).
 
@@ -1121,7 +1134,7 @@ number or other identifier of a person is needed.
   rename and delete there. Version v1 has no roles inside a circle.
 - **Sender proof over radio is weaker.** Direct packets over radio carry no signature; the pair key vouches for the
   sender, so a device whose private key is known to an attacker can also be impersonated towards it. In a circle every
-  member holds the circle key, so circle packets carry the device signature on every path (over radio since 12.11.2026;
+  member holds the circle key, so circle packets carry the device signature on every path (over radio since 12 November 2026;
   before, it could be switched off and every member could write in another member's name over radio).
 - **Random nonces under long-lived keys.** AES-256-GCM is used with random 96-bit nonces. For one key the chance of a
   repeated nonce stays below 2^-32 up to 2^32 packets; nothing in v1 counts packets or forces a key change before
@@ -1152,7 +1165,7 @@ changes its secret; what the device already held stays readable to whoever holds
 
 **Trust.** Clients trust the network key built into them to say which relays exist (ANDP §16.4). They do not trust
 relays with content. ANMP uses only standard primitives (X25519, Ed25519, HKDF-SHA256, AES-256-GCM) from platform
-libraries; v1 has had no external review.
+libraries.
 
 Please report weaknesses as described in `SECURITY.md`.
 
@@ -1166,8 +1179,10 @@ and sender tags, a public circle header, an ask, a patron, budget, chain values 
 clear by the owner (body bytes, signing bytes, signed map, seal key, packet; fixed one-time keys), a channel link and
 the record of a device address (token, derived space and key, record, sealed entry). For the radio way (ADR 0051, 0054)
 section `radio` also holds the radio rule, the accepted hours, a signed circle message and a direct message in the
-public form, the public form check, the patron exchange with fixed one-time keys (ask, patron, pickup, windows and
-the route tags they give), windows across an epoch border and packets every reader drops. Fixed nonces exist only for
+public form, the public form check, a sign of life and a helper's answer in the public form (`alivePacket` with the longest label
+that fits, `carePacket`), contents every reader rejects (`invalidContent`), the patron exchange with fixed one-time
+keys (ask, patron, pickup, windows and the route tags they give), windows across an epoch border and packets every
+reader drops. Fixed nonces exist only for
 the vectors; real packets always use a random nonce. Section `stats` holds the stats key and person marker of a day,
 a signed report (body bytes, signing bytes, signature, report), a switch report (`switchOff`), the relay index among 5 relays, UTC days around
 borders and version normalisation (ADR 0045).

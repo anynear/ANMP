@@ -51,7 +51,7 @@ internal class NetworkDirectory(
     private val _radio = MutableStateFlow<RadioList?>(null)
 
     /**
-     * The newest radio list (ANDP §5.9, ADR 0054 §1b) with the update rules of Docs ADR 0096; fetched with the network
+     * The newest radio list (ANDP §5.9, ADR 0054 §1b) with the update rules of ADR 0096; fetched with the network
      * list, kept across restarts, `null` until one arrived.
      */
     val radio: StateFlow<RadioList?> = _radio.asStateFlow()

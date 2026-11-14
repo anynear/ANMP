@@ -5,7 +5,7 @@
 //   ./gradlew :core:jvmTest :core:jsNodeTest :core:testAndroidHostTest
 //   ./gradlew :core:compileKotlinIosSimulatorArm64
 //
-// jvmTest also runs against the Go test relay of the private repository ANDP-Peer (next to ANDP, or ANDP_PEER_DIR)
+// jvmTest also runs against a Go test relay (repository ANDP-Peer, next to ANDP, or ANDP_PEER_DIR)
 // when it and `go` are present; ANMP_REQUIRE_GO=1 makes a missing one an error.
 
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi

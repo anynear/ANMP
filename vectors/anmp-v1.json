@@ -349,6 +349,35 @@
             "size": 99,
             "publicForm": true
         },
+        "alivePacket": {
+            "comment": "ADR 0083: sign of life of deviceA in the circle, public form, signed, circle key, nonce 10; labelBytes = longest ASCII label that still fits with this plan",
+            "scope": "circle-1",
+            "header": "a400181b0148763b6064e3c56679030306481fca78e1c9f96f86",
+            "content": "a30048a0a1a2a3a4a5a6a7011a68e778001823ab0048a0a1a2a3a4a5a6a70101021a68e77800031a68e7e880041a68e77b840519012c061902580719038408f5096757616e6465726e0a1850",
+            "packet": "414e0182581aa400181b0148763b6064e3c56679030306481fca78e1c9f96f8658adf0f1f2f3f4f5f6f7f8f9fa10528d4fdf8470196acee15c023001874c3b6bee779d010d535cb1132ebc2217ffdefa744dd7a4ce631339ab07b101e962de9f16f57441c1ab6b92af27d6e86f8772c523e1631c020f06a57575ed4f94aa6cf545084efc320f033212702ee7b9d946d6de5566d3d21017b64036c0c8892c4a5e7017c051f6992c952ee4635bc6166b0dbd3e10a3407deb1dd6e5346b352096f251d3bb0004e49d3c3b9cf9a648a4f2",
+            "opened": "83581aa400181b0148763b6064e3c56679030306481fca78e1c9f96f86584ca30048a0a1a2a3a4a5a6a7011a68e778001823ab0048a0a1a2a3a4a5a6a70101021a68e77800031a68e7e880041a68e77b840519012c061902580719038408f5096757616e6465726e0a185058402bc8d16b9e9544632b7a45a05239784b1680296eeb01c701d479e7ba81bcfa545e0019ee4c001dcdd3ce31185eb13fcae65bf1587d6b95b56e128b4ccb72d503",
+            "size": 207,
+            "labelBytes": 32
+        },
+        "carePacket": {
+            "comment": "ADR 0083: deviceB answers the plan of alivePacket with looking (1), public form, signed by deviceB, nonce 11",
+            "scope": "circle-1",
+            "header": "a400181c01484e2ff45b61fb3818030306481fca78e1c9f96f86",
+            "content": "a30048b0b1b2b3b4b5b6b7011a68e7783c1824a20048a0a1a2a3a4a5a6a70101",
+            "packet": "414e0182581aa400181c01484e2ff45b61fb3818030306481fca78e1c9f96f865881f0f1f2f3f4f5f6f7f8f9fa114326a031a774f0701e3622bc183ad3d68f34f68a0272860e381d963b29559bd01ea209f67ce57e79ce2cf7b62d434d9ae8b6c62b3bc8fe03279ba2fd7b3c9c460d468e97a884dedf4ca07bf894c31c7b5a602682b18a55f2b8b2bf4028dae844eaf35171c8d1c92bec6fda28113ef1ef8f376999e4",
+            "opened": "83581aa400181c01484e2ff45b61fb3818030306481fca78e1c9f96f865820a30048b0b1b2b3b4b5b6b7011a68e7783c1824a20048a0a1a2a3a4a5a6a7010158409a9c497232a2b47f9937abb8dfcf2f69892abcecd4250db633d90aa4c7d0f6b1aca5b677766a5fc96e631f51ae04d7319bb8d004b59fb1c7414c1c514c382d00",
+            "size": 163
+        },
+        "invalidContent": [
+            {
+                "name": "aliveWithoutQuiet",
+                "content": "a11823a70048a0a1a2a3a4a5a6a7010102010302040105010601"
+            },
+            {
+                "name": "careWithoutState",
+                "content": "a11824a10048a0a1a2a3a4a5a6a7"
+            }
+        ],
         "publicForm": [
             {
                 "name": "directPacket",

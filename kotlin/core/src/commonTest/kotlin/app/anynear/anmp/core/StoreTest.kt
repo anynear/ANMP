@@ -81,9 +81,12 @@ class StoreTest {
 
         val listed = assertNotNull(a.core.storeList()).single()
         val entry = net.relays.flatMap { it.puts }.first { it.id.toString() == listed.entryId }
+        // Entry and the content it refers to (ANDP §7), as the relays count them. The holders learn of it one after
+        // another, so wait until the answer settles (on slow CI machines this took longer than one round).
+        val expected = entry.size + entry.refs.sumOf { it.size }
+        eventually { a.core.storeUsage()?.used == expected }
         val usage = assertNotNull(a.core.storeUsage())
-        // Entry and the content it refers to (ANDP §7), as the relays count them.
-        assertEquals(entry.size + entry.refs.sumOf { it.size }, usage.used)
+        assertEquals(expected, usage.used)
         assertTrue(usage.used > 3000)
         // Holders that answered and do not know of a lower quota: the smallest one asked counts.
         assertTrue(usage.quota == 5_000_000L || usage.quota == 4_000_000L)
@@ -91,7 +94,7 @@ class StoreTest {
         // Deleted: nothing is used any more.
         assertTrue(a.core.storeDelete("f1"))
         eventually { a.core.storeList()?.isEmpty() == true }
-        assertEquals(0, assertNotNull(a.core.storeUsage()).used)
+        eventually { a.core.storeUsage()?.used == 0L }
     }
 
     @Test

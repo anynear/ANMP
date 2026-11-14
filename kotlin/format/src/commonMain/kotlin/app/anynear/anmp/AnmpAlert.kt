@@ -98,17 +98,17 @@ class AnmpIngressRecord(
 )
 
 /**
- * Alerts and channels (ADR 0062). An alert is its own packet `PA\x01`: the [AnmpAlertBody] signed by a sender
+ * Alerts and channels (ADR 0062). An alert is its own packet `AA\x01`: the [AnmpAlertBody] signed by a sender
  * ([sign]) and sealed to the channel's public read key with a one-time X25519 key ([seal]), so that machines (the
  * relay's device address) can make one and only holders of the read key can open it. Spec: `spec/anmp.md`,
  * "Alerts and channels".
  */
 @JsExport
 object AnmpAlerts {
-    /** "PA", version v1. */
+    /** "AA", version v1. */
     val MAGIC = byteArrayOf(0x41, 0x41, 0x01)
 
-    /** "PI", version v1: sealed record of a device address. */
+    /** "AI", version v1: sealed record of a device address. */
     val INGRESS_MAGIC = byteArrayOf(0x41, 0x49, 0x01)
 
     const val VERSION = 1
@@ -145,19 +145,29 @@ object AnmpAlerts {
     /** Longest incident key before hashing (UTF-8 bytes). */
     const val MAX_KEY_BYTES = 200
 
-    /** `true` if the body keeps the rules of ADR 0062 §3: sizes, priority, URL scheme, text or attachment. */
+    /**
+     * `true` if the body keeps the rules of ADR 0062 §3: sizes (also at most [MAX_ATTACHMENT_BYTES] per attachment),
+     * priority, URL scheme, text or attachment. Whether `area` may be set depends on the channel: [isValidIn].
+     */
     fun isValid(b: AnmpAlertBody): Boolean {
         if (b.id.size != ID_BYTES || b.ts < 0 || b.prio !in INFO..ALARM) return false
         if ((b.title?.encodeToByteArray()?.size ?: 0) > MAX_TITLE_BYTES || b.text.encodeToByteArray().size > MAX_TEXT_BYTES) return false
         val attachments = b.attachments.orEmpty()
         if (b.text.isEmpty() && attachments.isEmpty()) return false
         if (attachments.size > MAX_ATTACHMENTS || attachments.any { it.id.size != Anmp.BLOB_ID_BYTES || it.key.size != AnmpBlob.KEY_BYTES }) return false
+        if (attachments.any { it.size !in 0..MAX_ATTACHMENT_BYTES }) return false
         if (b.url != null && !isWebUrl(b.url)) return false
         if (b.until != null && b.until < 0) return false
         if (b.replaces != null && b.replaces.size != ID_BYTES) return false
         if (b.key != null && b.key.size != ID_BYTES) return false
         return true
     }
+
+    /**
+     * [isValid] for a channel that is [curated] or not: regional keys (`area`) belong only into curated channels; in
+     * any other channel an alert with `area` is invalid as a whole (ADR 0062).
+     */
+    fun isValidIn(b: AnmpAlertBody, curated: Boolean): Boolean = isValid(b) && (curated || b.area.isNullOrEmpty())
 
     /** `http://` or `https://` (scheme case-insensitive). */
     fun isWebUrl(url: String): Boolean = url.length > 8 && (url.startsWith("http://", ignoreCase = true) || url.startsWith("https://", ignoreCase = true))
@@ -194,7 +204,7 @@ object AnmpAlerts {
     }
 
     /**
-     * Seals [signed] to the public read key: `PA\x01` ‖ eph.pub ‖ nonce ‖ AES-256-GCM(key, signed, AAD `PA\x01` ‖
+     * Seals [signed] to the public read key: `AA\x01` ‖ eph.pub ‖ nonce ‖ AES-256-GCM(key, signed, AAD `AA\x01` ‖
      * eph.pub), key = HKDF(X25519(eph, read), `anmp/v1/alert-seal` ‖ eph.pub ‖ read.pub). [ephPrivate] and [nonce]
      * only for test vectors; otherwise both are random.
      */
@@ -300,7 +310,7 @@ object AnmpAlerts {
     @JsExport.Ignore
     suspend fun ingressSpace(token: ByteArray): AnmpSpaceKey = AnmpSpaceKey.fromPrivateKey(ingressSeed(token))
 
-    /** `PI\x01` ‖ nonce ‖ AES-256-GCM(HKDF(raw token, `anmp/v1/ingress-aead`), record, AAD `PI\x01`). [nonce] only for vectors. */
+    /** `AI\x01` ‖ nonce ‖ AES-256-GCM(HKDF(raw token, `anmp/v1/ingress-aead`), record, AAD `AI\x01`). [nonce] only for vectors. */
     @JsExport.Ignore
     suspend fun sealIngress(token: ByteArray, record: AnmpIngressRecord, nonce: ByteArray? = null): ByteArray {
         require(token.size == TOKEN_BYTES) { "token must have $TOKEN_BYTES bytes" }

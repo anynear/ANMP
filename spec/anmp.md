@@ -964,9 +964,12 @@ or two when the 30 days cross an epoch border. From f and b the patron computes 
 and of no others.
 
 **Delivery.** The patron sends from the radio inbox the packets whose route tag is among these tags and whose ANDP `ts`
-is later than field 7 of the ask minus 10 minutes, newest first, at most 5 per ask, with hop limit = hops of the ask.
+is later than field 7 of the ask minus 10 minutes, newest first, at most 5 per ask, with hop limit = hops of the ask,
+at least 1.
 It keeps watching the radio inbox for these tags until 60 minutes after the last pickup. Patrons send only for pickups
-they received themselves. Timing, limits and listen-before-talk: ADR 0051.
+they received themselves. A packet goes to the same asker (sender tag of its pickup) at most once an hour, across
+patronages: each ask brings a new one-time key, and `since` overlaps. A patron whose hourly budget for the gateway
+(the app: its radio) is used up does not answer an ask. Timing, limits and listen-before-talk: ADR 0051.
 
 | Radio budget, public form | Text bytes |
 |---|---|
@@ -1073,7 +1076,7 @@ content is defined here. Nothing of it is built into the app.
 {"v": 1, "id": "<network ID>", "network": "<network key>", "issued": 1762300000000,
  "regions": [
   {"name": "Hessen", "area": [[49.4, 7.7], [51.7, 7.7], [51.7, 10.3], [49.4, 10.3]], "preset": "SHORT_SLOW",
-   "channel0": true,
+   "lora": "EU_868", "frequency": 869.525, "channel0": true,
    "communities": [
     {"name": "Mesh Sample", "channel": "Mesh Sample", "psk": "<b64u>", "preset": "SHORT_SLOW",
      "operator": "example.org", "source": "https://example.org/…"}]}]}
@@ -1084,14 +1087,21 @@ content is defined here. Nothing of it is built into the app.
 | `regions[].name` | label for people |
 | `regions[].area` | simple polygon of at least 3 `[lat, lon]` points in degrees (WGS 84), not closed; even-odd rule |
 | `regions[].preset` | Meshtastic modem preset of channel 0: `LONG_FAST`, `LONG_SLOW`, `LONG_MODERATE`, `LONG_TURBO`, `MEDIUM_FAST`, `MEDIUM_SLOW`, `SHORT_FAST`, `SHORT_SLOW`, `SHORT_TURBO` |
+| `regions[].lora` | Meshtastic LoRa region code (`Config.LoRaConfig.RegionCode` without `UNSET`, e.g. `EU_868`, `US`, `EU_433`); absent means `EU_868` |
+| `regions[].frequency` | frequency in MHz the radio uses there (Meshtastic `override_frequency`), 100–3000; absent or `0` means the default slot of region and preset |
 | `regions[].channel0` | whether ANMP goes out on channel 0 there (ADR 0054 §1); absent means `true`; otherwise only on `anynear` |
 | `regions[].communities[]` | public channels of communities (ADR 0054 §1a): `channel` as on the radio (1–11 bytes UTF-8), `psk` b64u of 1, 16 or 32 bytes, `preset`, `operator` and `source` for people |
 
 - Unknown fields are ignored. A region or community that is invalid, or names a preset the app does not know, is
   skipped; the rest of the list counts (ADR 0061 decision 13).
-- The app picks the region on the phone: the first region whose area contains its rough position. The position never
-  leaves the phone. Outside all regions, or without a list, the app's default radio settings apply (ADR 0006) and no
-  community channels are offered.
+- The order counts: the first region whose area contains a point wins, so smaller regions come before the larger ones
+  around them (e.g. Hessen before Europe).
+- The app picks the region on the phone from its rough position (`RadioList.regionFor`), with 2 km of hysteresis at
+  borders: a radio keeps its region while it is inside or less than 2 km outside, unless an earlier region contains
+  the position at least 2 km deep; otherwise the first region containing the position 2 km deep counts, else the first
+  containing it at all. The position never leaves the phone. Outside all regions, or without a list, the radio keeps
+  the region it had, else the app's default radio settings apply (ADR 0006); no community channels are offered there.
+  A person may also choose a region by hand (ADR 0054 §1b).
 - The last accepted list is kept and stays valid without internet.
 
 ### Update rules (ADR 0096)
@@ -1119,6 +1129,29 @@ only when an old build has to go; without them nothing is asked.
   saving a backup stays reachable. The app blocks only if there is a way to update (ADR 0096 §6).
 - The core fetches the radio list with the network list from the active relays and keeps the newest valid one
   (`AnmpCore.radioList`, `UpdateRule.demand`; web: `AnmpCoreWeb.webUpdate`).
+
+### Gateway (ADR 0054 §5b)
+
+The optional block `gateway` names the anynear MQTT server. Every radio that runs on Wi-Fi uploads there as a gateway;
+the app writes the values with the Wi-Fi settings. The login is public, it is on every gateway.
+
+```json
+"gateway": {"host": "mqtt.example.net", "port": 1883, "tls": false, "user": "<user>", "pass": "<password>", "root": "msh/EU_868"}
+```
+
+| Field | Rule |
+|---|---|
+| `host` | DNS name or IPv4 address, letters, digits, `.` and `-` only |
+| `port` | optional, 1–65535; absent means 1883, with `tls` 8883 |
+| `tls` | optional, absent means `false` |
+| `user` | 1–63 bytes UTF-8 |
+| `pass` | 0–31 bytes UTF-8 |
+| `root` | root topic, 1–31 bytes UTF-8 |
+
+- The firmware's MQTT address is `host`, followed by `:port` only if the port is not the default; it must fit in 63
+  bytes (`RadioGateway.address`, Go `Address`).
+- If the block is missing or anything in it is invalid, there is no gateway: the app writes no gateway values and turns
+  them off on radios that have them. Unknown fields inside the block are ignored.
 
 ## Usage statistics (ADR 0045)
 
@@ -1231,5 +1264,12 @@ the vectors; real packets always use a random nonce. Section `stats` holds the s
 a signed report (body bytes, signing bytes, signature, report), a switch report (`switchOff`), the relay index among 5 relays, UTC days around
 borders and version normalisation (ADR 0045).
 
-`vectors/anmp-v1-radio-list.json` holds texts of radio lists and what a reader keeps of them ([Radio list](#radio-list)),
+`vectors/anmp-v1-radio-list.json` holds texts of radio lists and what a reader keeps of them, including `gateway` ([Radio list](#radio-list)),
 written by `kotlin/core` (`RadioListVectorsTest`).
+
+`vectors/anmp-v1-radio-flows.json` holds radio flows of a patron (ADR 0054 §3a), written by `kotlin/core`
+(`RadioFlowVectorsTest`, through `RadioRelay`): steps of time and input (a heard `ask`, `patron` or `pickup`,
+entries put into the radio inbox, a reading of the radio inbox) with the packets that go out (hop limit, gateway) and
+the limits reached, once with the settings of an app (wait 2 to 20 s by signal) and once with those of the bridge
+(30 s), the random part of each wait and the one-time keys fixed. A rule of the radio way that changes gets a flow
+first; Kotlin and Go change in the same pull request.

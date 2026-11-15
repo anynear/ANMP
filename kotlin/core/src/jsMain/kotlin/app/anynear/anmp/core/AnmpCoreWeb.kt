@@ -11,6 +11,9 @@ import app.anynear.andp.Key
 import app.anynear.anmp.AnmpAttachment
 import app.anynear.anmp.core.firmware.WebFirmwareList
 import app.anynear.anmp.core.firmware.radioSoftwareList
+import app.anynear.anmp.core.radio.RadioTarget
+import app.anynear.anmp.core.radio.WebRadioArea
+import app.anynear.anmp.core.radio.WebRadioGateway
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.GlobalScope
@@ -169,6 +172,50 @@ class AnmpCoreWeb private constructor(private val core: AnmpCore, private val ho
 
     /** Asks the relays for a newer radio list now (e.g. when the tab becomes visible). */
     fun refreshRadioList(): Promise<Unit> = GlobalScope.promise { core.refreshRadioList() }
+
+    /**
+     * Where a radio on Wi-Fi uploads as a gateway (ADR 0054 §5b), from the signed radio list; loads the list first if
+     * there is none yet. `null`: the list names no gateway, then a radio set up on Wi-Fi is none.
+     */
+    fun radioGateway(): Promise<WebRadioGateway?> = GlobalScope.promise {
+        if (core.radioList.value == null) {
+            try {
+                core.refreshRadioList(force = true)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // No relay answered: without a list there is no gateway.
+            }
+        }
+        core.radioList.value?.gateway?.let(::WebRadioGateway)
+    }
+
+    /**
+     * Names of the radio areas of the signed radio list (ADR 0054 §1b) in its order, only those the core can apply; loads
+     * the list first if there is none yet. Empty without a list.
+     */
+    fun radioAreas(): Promise<Array<String>> = GlobalScope.promise {
+        if (core.radioList.value == null) {
+            try {
+                core.refreshRadioList(force = true)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // No relay answered: no areas, the default of ADR 0006 applies.
+            }
+        }
+        core.radioList.value?.regions.orEmpty().filter { RadioTarget.of(it) != null }.map { it.name }.toTypedArray()
+    }
+
+    /**
+     * The area for a radio at the approximate position (RadioList.regionFor, 2 km at borders), [current] the area it had;
+     * `null` outside all areas or without a list. The position stays in the browser.
+     */
+    fun radioAreaAt(lat: Double, lon: Double, current: String?): String? =
+        core.radioList.value?.regionFor(lat, lon, current)?.takeIf { RadioTarget.of(it) != null }?.name
+
+    /** Settings of the area named [name] for [RadioWifiWeb.setUp]; `null` if the list has no such area. */
+    fun radioArea(name: String): WebRadioArea? = core.radioList.value?.region(name)?.let(RadioTarget::of)?.let(::WebRadioArea)
 
     /** Push subscription of this browser (ANDP §10.1); `null` deregisters. */
     fun setWebPushTarget(endpoint: String?) = core.setWebPushTarget(endpoint)

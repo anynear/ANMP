@@ -221,7 +221,59 @@ class AnmpContent(
     @CborLabel(35) val alive: AnmpAlive? = null,
     /** Answer of a helper (kind care, ADR 0083 §4); also over radio. */
     @CborLabel(36) val care: AnmpCare? = null,
-)
+    /**
+     * Device ID (16 bytes) of the original sender, only in an own copy of a packet received from someone else (ADR 0107):
+     * a received message written into the own mailbox by an own device (migrated, or heard only over radio).
+     */
+    @CborLabel(37) val author: ByteArray? = null,
+) {
+    /**
+     * This content as an own copy in the conversation with the person [peer] (person ID, content 26), written by the own
+     * device with the keys [key] (X25519) and [signKey] (Ed25519) (ADR 0107). [author]: device ID of the original sender
+     * of a received packet, `null` for a packet the own person sent. What only proves the original sender (its keys,
+     * chain, grant, mailbox) is left out: the own device vouches for the copy.
+     */
+    fun asCopy(peer: ByteArray, author: ByteArray?, key: ByteArray, signKey: ByteArray): AnmpContent = AnmpContent(
+        id = id,
+        ts = ts,
+        text = text,
+        ref = ref,
+        refFrom = refFrom,
+        emoji = emoji,
+        ids = ids,
+        name = name,
+        key = key,
+        signKey = signKey,
+        node = node,
+        attachments = attachments,
+        image = image,
+        imageTs = imageTs,
+        imageHash = imageHash,
+        circleImageHash = circleImageHash,
+        meta = meta,
+        wantHash = wantHash,
+        haveRef = haveRef,
+        needsHistory = needsHistory,
+        history = history,
+        rekey = rekey,
+        removed = removed,
+        inbox = null,
+        grant = null,
+        person = null,
+        peer = peer,
+        personRef = null,
+        circle = circle,
+        sync = sync,
+        keys = keys,
+        ownData = ownData,
+        arrived = arrived,
+        channel = channel,
+        link = link,
+        alive = alive,
+        care = care,
+        author = author,
+    )
+}
 
 /**
  * Sign of life (ADR 0083 §5) of the sender's person, in a circle it chose. Every packet carries the whole plan, so a helper

@@ -310,9 +310,14 @@ class MultiDeviceTest {
         eventually { ben.core.membersOf(circle.id).any { it.deviceId == phone.deviceId } }
         phone.core.setRecoveryExtras(mapOf("pv" to ByteArray(32) { 9 }))
 
+        assertEquals(null, phone.core.pendingEmergencyCard())
         val code = assertNotNull(phone.core.createEmergencyCard())
+        // Until it is confirmed, the same code can be shown again (dialog closed in between).
+        assertEquals(code, phone.core.pendingEmergencyCard())
         assertTrue(!phone.core.confirmEmergencyCard("0000-0000-0000-0000-0000-0000-000"))
+        assertEquals(code, phone.core.pendingEmergencyCard())
         assertTrue(phone.core.confirmEmergencyCard(code))
+        assertEquals(null, phone.core.pendingEmergencyCard())
         assertTrue(phone.core.hasEmergencyCard)
         assertEquals(null, phone.secrets.get(CoreIdentity.ROOT))
         // Extras without the password key (e.g. after a restart) keep the key that is already there.
@@ -439,6 +444,130 @@ class MultiDeviceTest {
     }
 
     @Test
+    fun emergencyCardBringsDirectMessagesBack() = world {
+        // ADR 0107: direct messages go to the person's mailbox recipient, so a phone back from the card reads them.
+        val phone = device("Anna")
+        val ben = device("Ben")
+        assertIs<AddContactResult.Added>(ben.core.addContact(phone.core.ownContactLink()))
+        eventually { phone.core.canWriteTo(ben.deviceId) && ben.core.canWriteTo(phone.deviceId) }
+        eventually { ben.core.membersOf(MemberState.CONTACTS).any { it.person == phone.info.personId } }
+        eventually { phone.core.membersOf(MemberState.CONTACTS).any { it.person == ben.info.personId } }
+        val fromBen = assertNotNull(ben.core.sendDirect(phone.info.personId, "Hallo Anna"))
+        phone.await<CoreEvent.Message> { it.mid == fromBen.mid }
+        val fromAnna = assertNotNull(phone.core.sendDirect(ben.info.personId, "Hallo Ben"))
+        ben.await<CoreEvent.Message> { it.mid == fromAnna.mid }
+        val code = assertNotNull(phone.core.createEmergencyCard())
+        assertTrue(phone.core.confirmEmergencyCard(code))
+        // The phone is gone only after its state reached the relays (slower on iOS).
+        eventually { phone.core.pendingWrites() == 0 }
+        phone.core.stop()
+        devices -= phone
+
+        val fresh = device("Neu")
+        var result: RecoverResult = RecoverResult.Later
+        eventually { result = fresh.core.recoverWithCode(code); result != RecoverResult.Later }
+        assertIs<RecoverResult.Recovered>(result)
+        fresh.core.stop()
+        devices -= fresh
+        val again = device("Anna", secrets = fresh.secrets)
+        // Both directions of the conversation come back: Ben's message and Anna's own copy.
+        val got = again.await<CoreEvent.Message>(kotlin.time.Duration.parse("60s")) { it.mid == fromBen.mid }
+        assertEquals(Conversation.Direct(ben.info.personId), got.conversation)
+        val own = again.await<CoreEvent.Message>(kotlin.time.Duration.parse("60s")) { it.mid == fromAnna.mid }
+        assertEquals(Conversation.Direct(ben.info.personId), own.conversation)
+    }
+
+    @Test
+    fun updateMovesOldDirectMessagesToThePerson() = world {
+        // Before ADR 0107: direct messages sealed per device. After the update the phone moves them (§6), so a phone
+        // back from the emergency card reads them too.
+        val legacy = net.config(legacyDirect = true)
+        val phone = device("Anna", config = legacy)
+        val ben = device("Ben", config = legacy)
+        assertIs<AddContactResult.Added>(ben.core.addContact(phone.core.ownContactLink()))
+        eventually { phone.core.canWriteTo(ben.deviceId) && ben.core.canWriteTo(phone.deviceId) }
+        eventually { ben.core.membersOf(MemberState.CONTACTS).any { it.person == phone.info.personId } }
+        eventually { phone.core.membersOf(MemberState.CONTACTS).any { it.person == ben.info.personId } }
+        val fromBen = assertNotNull(ben.core.sendDirect(phone.info.personId, "Alt von Ben"))
+        phone.await<CoreEvent.Message> { it.mid == fromBen.mid }
+        val fromAnna = assertNotNull(phone.core.sendDirect(ben.info.personId, "Alt von Anna"))
+        ben.await<CoreEvent.Message> { it.mid == fromAnna.mid }
+        val code = assertNotNull(phone.core.createEmergencyCard())
+        assertTrue(phone.core.confirmEmergencyCard(code))
+        eventually { phone.core.pendingWrites() == 0 }
+
+        // The update: same installation, new version.
+        phone.core.stop()
+        devices -= phone
+        val updated = device("Anna", secrets = phone.secrets, store = phone.store, blobs = phone.blobs)
+        // An installation that ran before shows no loading notice.
+        assertFalse(updated.core.loading.value.any)
+        eventually { updated.core.migrateMailbox() }
+        // Anna's own message lay only in Ben's mailbox: the app hands its history over once.
+        val mine = OwnHistoryItem(ben.info.personId, fromAnna.mid, 1_700_000_000_000, "Alt von Anna", author = null)
+        eventually { updated.core.keepOwnHistory(listOf(mine)) }
+        // Moved and history kept: the phone notes it in its entry of the device list.
+        eventually { updated.core.ownDevices.value.single { it.deviceId == updated.deviceId }.moved }
+        eventually { updated.core.pendingWrites() == 0 }
+        updated.core.stop()
+        devices -= updated
+
+        val fresh = device("Neu")
+        var result: RecoverResult = RecoverResult.Later
+        eventually { result = fresh.core.recoverWithCode(code); result != RecoverResult.Later }
+        assertIs<RecoverResult.Recovered>(result)
+        fresh.core.stop()
+        devices -= fresh
+        val again = device("Anna", secrets = fresh.secrets)
+        val got = again.await<CoreEvent.Message>(kotlin.time.Duration.parse("60s")) { it.mid == fromBen.mid }
+        assertEquals(Conversation.Direct(ben.info.personId), got.conversation)
+        assertEquals(ben.deviceId, got.fromDevice)
+        assertEquals(ben.info.personId, got.fromPerson)
+        val own = again.await<CoreEvent.Message>(kotlin.time.Duration.parse("60s")) { it.mid == fromAnna.mid }
+        assertEquals(Conversation.Direct(ben.info.personId), own.conversation)
+        assertEquals(phone.info.personId, own.fromPerson)
+        // Back from the card it showed the loading notice until the own mailbox was read once (fast here); now it is gone.
+        eventually { !again.core.loading.value.mailbox }
+        // The one back from the card has nothing to move and says so in its entry.
+        assertTrue(again.core.ownDevices.value.single { it.deviceId == again.deviceId }.moved)
+        // Written once, though the phone ran the move twice (at start and here).
+        kotlinx.coroutines.delay(2_000)
+        assertEquals(1, again.all<CoreEvent.Message>().count { it.mid == fromBen.mid })
+    }
+
+    @Test
+    fun replacingPhoneTakesOverTheDeviceSettings() = world {
+        val phone = device("Anna")
+        phone.core.setDeviceSettings(mapOf("radio" to "usb:1".encodeToByteArray(), "region" to "06".encodeToByteArray()))
+        eventually { !phone.core.writeDeviceSettings() }
+        val code = assertNotNull(phone.core.createEmergencyCard())
+        assertTrue(phone.core.confirmEmergencyCard(code))
+
+        val fresh = device("Neu")
+        var result: RecoverResult = RecoverResult.Later
+        eventually { result = fresh.core.recoverWithCode(code); result != RecoverResult.Later }
+        assertIs<RecoverResult.Recovered>(result)
+        fresh.core.stop()
+        devices -= fresh
+        val again = device("Anna", secrets = fresh.secrets)
+        again.core.setDeviceSettings(mapOf("hint" to "later".encodeToByteArray()))
+        // The new phone sees the old one with its settings, not itself.
+        var stored: List<StoredDevice>? = null
+        eventually { stored = again.core.storedDevices(); stored?.size == 1 }
+        assertEquals(phone.deviceId, stored!!.single().deviceId)
+        assertEquals(listOf("radio", "region"), stored!!.single().names)
+        // Taking over: the old settings are this phone's now, its own stay, the old entry is gone.
+        val taken = assertNotNull(again.core.takeOverDevice(phone.deviceId))
+        assertEquals("usb:1", taken["radio"]?.decodeToString())
+        val mine = again.core.deviceSettings()
+        assertEquals("06", mine["region"]?.decodeToString())
+        assertEquals("later", mine["hint"]?.decodeToString())
+        eventually { again.core.storedDevices()?.isEmpty() == true }
+        // Nothing left to take over from the old phone.
+        assertEquals(null, again.core.takeOverDevice(phone.deviceId))
+    }
+
+    @Test
     fun emergencyCardBringsProfileAndSettingsBack() = world {
         val phone = device("Anna")
         phone.core.setProfile("Anna B.", renamed = true)
@@ -500,6 +629,42 @@ class MultiDeviceTest {
         var result: RecoverResult = RecoverResult.Later
         eventually { result = fresh.core.recoverWithCode(code); result != RecoverResult.Later }
         assertEquals(RecoverResult.NotFound, result)
+    }
+
+    @Test
+    fun contactsSeeAnErasedPersonAsUnreachable() = world {
+        val phone = device("Anna")
+        val ben = device("Ben")
+        assertIs<AddContactResult.Added>(ben.core.addContact(phone.core.ownContactLink()))
+        eventually { phone.core.canWriteTo(ben.deviceId) && ben.core.canWriteTo(phone.deviceId) }
+        val hello = assertNotNull(ben.core.sendDirect(phone.deviceId, "Hallo"))
+        phone.await<CoreEvent.Message> { it.mid == hello.mid }
+
+        assertEquals(EraseResult.Done, phone.core.eraseEverything())
+
+        // Anna's grants are revoked: every relay refuses Ben's next message, Ben sees Anna as unreachable.
+        val lost = assertNotNull(ben.core.sendDirect(phone.deviceId, "Bist du noch da?"))
+        ben.await<CoreEvent.SendFailed> { it.ref == lost.mid }
+        val gone = ben.await<CoreEvent.ContactUnreachable>()
+        eventually { gone.personId in ben.core.unreachable.value }
+        // Removing the contact clears the mark.
+        ben.core.removeContact(gone.personId)
+        ben.await<CoreEvent.ContactReachable> { it.personId == gone.personId }
+        eventually { gone.personId !in ben.core.unreachable.value }
+    }
+
+    @Test
+    fun undeliveredWritesCountsOnlyWhatNoRelayHas() = world {
+        val phone = device("Anna")
+        val circle = phone.core.createCircle("Familie")
+        eventually { phone.core.circles.value.isNotEmpty() }
+        net.relays.forEach { it.offline = true }
+        assertNotNull(phone.core.sendCircle(circle.id, "später"))
+        // Other writes of the start may be open too: at least this one counts while no relay answers.
+        eventually { phone.core.undeliveredWrites() >= 1 }
+        net.relays.forEach { it.offline = false }
+        phone.core.networkChanged()
+        eventually { phone.core.undeliveredWrites() == 0 }
     }
 
     @Test

@@ -11,8 +11,11 @@ import app.anynear.anmp.AnmpKind
 import app.anynear.anmp.AnmpMessage
 import app.anynear.anmp.AnmpVerifier
 
-/** A recipient installation of a direct packet: device ID and X25519 key (b64u). */
-internal class Peer(val deviceId: String, val publicKey: String) {
+/**
+ * A recipient of a direct packet: device ID and X25519 key (b64u). [person]: a person's mailbox recipient named in its
+ * chain (ADR 0107); packets to it carry no signature, the pair key proves the sender.
+ */
+internal class Peer(val deviceId: String, val publicKey: String, val person: Boolean = false) {
     val deviceBytes: ByteArray get() = B64.decode(deviceId)
     val keyBytes: ByteArray get() = B64.decode(publicKey)
     val tag: ByteArray get() = Anmp.tagOf(deviceBytes)
@@ -47,7 +50,7 @@ internal object Packets {
             senderDevice = to?.let { me.device.deviceId },
         )
         val cipher: AnmpCipher = if (to != null) me.device.directCipher(to.deviceBytes, to.keyBytes) else requireNotNull(circle) { "circle packet without circle key" }.anmp.cipher
-        return Anmp.encodeFull(header, content, scope, cipher, me.device)
+        return Anmp.encodeFull(header, content, scope, cipher, if (to?.person == true) null else me.device)
     }
 
     /**
@@ -83,7 +86,8 @@ internal object Packets {
         } else {
             circle?.anmp?.cipher ?: return null
         }
-        val m = Anmp.decode(packet, scope, cipher, AnmpVerifier.fromContent, requireSignature = true) ?: return null
+        // To the person's mailbox recipient (ADR 0107) the pair key proves the sending device; no signature needed.
+        val m = Anmp.decode(packet, scope, cipher, AnmpVerifier.fromContent, requireSignature = !toMailbox) ?: return null
         return checkSender(m, forwarded = false)
     }
 
@@ -98,6 +102,9 @@ internal object Packets {
         val key = (m.content.key ?: m.header.senderKey)?.takeIf { it.size == Anmp.KEY_BYTES } ?: return null
         if (m.header.senderKey != null && !m.header.senderKey!!.contentEquals(key)) return null
         val device = AnmpKeys.deviceIdOf(sk)
+        // Unsigned: content 9 is only a claim; it must name the device of header 5, whose key opened the packet. Whether
+        // that device and key belong to the sender's person is checked against its chain ([AnmpCore] acceptSender).
+        if (!m.signed && m.header.senderDevice?.contentEquals(device) != true) return null
         return Opened(m, B64.encode(device), B64.encode(key), B64.encode(sk), forwarded)
     }
 

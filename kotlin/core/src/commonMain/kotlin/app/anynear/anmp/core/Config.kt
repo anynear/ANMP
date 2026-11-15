@@ -47,6 +47,11 @@ class AnmpCoreConfig(
      * here counts as curated when joined; the flag in a link alone does not make one.
      */
     val curatedChannels: List<String> = emptyList(),
+    /**
+     * Only for tests of the move to the person (ADR 0107 §6): write like before it, per device and without the mailbox
+     * recipient in the own list, and do not move the mailbox. Never set in apps.
+     */
+    internal val legacyDirect: Boolean = false,
 ) {
     companion object {
         const val SEED_URL = "https://anynear.net"
@@ -165,6 +170,8 @@ data class CoreTimings(
     /** History download: pause between attempts. */
     val historyRetryMin: Duration = 30.seconds,
     val historyRetryMax: Duration = 10.minutes,
+    /** A direct packet heard over radio waits this long for its internet copy before an own copy is written (ADR 0107 §4). */
+    val radioCopyWait: Duration = 10.minutes,
     /** How often removed circles are checked for being purged after their grace period. */
     val purgeCheck: Duration = 1.hours,
 )

@@ -25,6 +25,7 @@ import app.anynear.andp.WatchTarget
 import app.anynear.andp.watchIdForHexToken
 import app.anynear.anmp.Anmp
 import app.anynear.anmp.AnmpAead
+import app.anynear.anmp.AnmpMailbox
 import app.anynear.anmp.AnmpAlertBody
 import app.anynear.anmp.AnmpAlerts
 import app.anynear.anmp.AnmpChannelInvite
@@ -190,6 +191,9 @@ class AnmpCore(
     /** Own and subscribed channels (ADR 0062). */
     val channels: StateFlow<List<ChannelState>> = _state.map { it.channels }.stateIn(cs, SharingStarted.Eagerly, emptyList())
 
+    /** Persons whose mailbox refuses us, with since when (ms; [CoreEvent.ContactUnreachable]). */
+    val unreachable: StateFlow<Map<String, Long>> = _state.map { it.unreachable }.stateIn(cs, SharingStarted.Eagerly, emptyMap())
+
     /** Accepted alerts as kept (30 days); [alertTick] recomputes the status when one expires. */
     private val storedAlerts = MutableStateFlow<List<StoredAlert>>(emptyList())
     private val alertTick = MutableStateFlow(0L)
@@ -240,7 +244,9 @@ class AnmpCore(
     /** Entries of a previous circle space already copied into the new one since the start. */
     private val circleCopies = mutableSetOf<String>()
 
-    private val transport = Transport(cs, platform, net, pool, timings, ::accessFor, ::ownWatchId) { emit(it) }
+    private val transport = Transport(cs, platform, net, pool, timings, ::accessFor, ::ownWatchId, { emit(it) }) { space ->
+        onCore { onMailboxDenied(space) }
+    }
     private val radioSoftware = RadioInbox.parse(config.radioSoftwareSpace, config.radioSoftwareGrant)?.let { (space, grant) ->
         PublishedSpace(space, grant, net, pool)
     }
@@ -258,8 +264,16 @@ class AnmpCore(
                 loadStreamKeys(create = false)
                 store = ownStore(StoreKeys.loadOrCreate(platform.secrets))
                 _state.value = loadState()
+                // Only an installation that ran before ADR 0107 has entries sealed for its device; a new one, added or
+                // back from the emergency card has a new device ID and nothing to move (§6).
+                if (state.ownProof == null && !state.mailboxMigrated && !config.legacyDirect) update { s -> s.copy(mailboxMigrated = true, historyKept = true) }
+                // An installation that already ran has read what it has; only new devices show the loading notice.
+                if (state.ownProof != null && !state.mailboxRead) {
+                    update { s -> s.copy(mailboxRead = true, circlesRead = (s.circlesRead + s.circles.map { it.id }).distinct()) }
+                }
                 warmProofs()
                 ensureOwnChain()
+                markMoved()
                 platform.secrets.get(RECOVER_SYNC)?.let { raw ->
                     runCatching { coreCbor.decodeFromByteArray(AnmpSync.serializer(), raw) }.getOrNull()?.let { applySync(it) }
                     platform.secrets.put(RECOVER_SYNC, null)
@@ -268,6 +282,7 @@ class AnmpCore(
                 loadAlerts()
                 net.loadSaved()
                 if (state.previousStore != null) cs.launch { runCatching { moveOldStore() } }
+                if (!state.mailboxMigrated && !config.legacyDirect) cs.launch { keepMigrating() }
                 _identity.value = IdentityInfo(me.deviceId, B64.encode(me.tag), me.publicKey, me.signKey, me.inbox.toString(), ownPersonId)
                 opened.complete(Unit)
             }
@@ -357,9 +372,11 @@ class AnmpCore(
         platform.secrets.get(STATE_KEY)?.let { runCatching { coreJson.decodeFromString(CoreState.serializer(), it.decodeToString()) }.getOrNull() } ?: CoreState()
 
     private suspend fun update(change: (CoreState) -> CoreState): CoreState = stateLock.withLock {
-        val next = change(_state.value)
-        if (next != _state.value) {
+        val prev = _state.value
+        val next = change(prev)
+        if (next != prev) {
             _state.value = next
+            if (next.circles != prev.circles || next.mailboxRead != prev.mailboxRead || next.circlesRead != prev.circlesRead) refreshLoading()
             platform.secrets.put(STATE_KEY, coreJson.encodeToString(CoreState.serializer(), next).encodeToByteArray())
         }
         next
@@ -434,6 +451,9 @@ class AnmpCore(
     /** Own key chain; `null` only on a device that was added without one (should not happen). */
     private var own: AnmpPerson? = null
 
+    /** [eraseEverything] runs: nothing new is taken in. */
+    private var erasing = false
+
     private val _ownDevices = MutableStateFlow<List<DeviceInfo>>(emptyList())
 
     /** Devices of the own person, this one included. */
@@ -461,6 +481,10 @@ class AnmpCore(
             .firstNotNullOfOrNull { raw -> runCatching { AnmpPersons.verify(raw) }.getOrNull()?.takeIf { it.cert.person.contentEquals(me.person.publicKey) } }
         if (stored != null && (stored.device(me.device.deviceId) != null || stored.isRevoked(me.device.deviceId))) {
             setOwn(stored)
+            // Chains from before ADR 0107 do not name the mailbox recipient yet: the next list does.
+            if (stored.list.mailbox == null && stored.list.inbox.contentEquals(me.inbox.bytes) && !revokedHere && !config.legacyDirect) {
+                changeOwnList(stored.list.devices, stored.list.revoked, quiet = true)
+            }
             return
         }
         val root = me.root
@@ -470,8 +494,8 @@ class AnmpCore(
             return
         }
         val cert = AnmpPersons.verifyCert(certSigned) ?: return
-        val devices = stored?.list?.devices.orEmpty() + AnmpDeviceEntry(me.device.signKey, me.device.publicKey, added = now())
-        val list = AnmpDeviceList(cert.root, cert.n, (stored?.list?.seq ?: 0) + 1, now(), me.inbox.bytes, devices, stored?.list?.revoked.orEmpty())
+        val devices = stored?.list?.devices.orEmpty() + AnmpDeviceEntry(me.device.signKey, me.device.publicKey, added = now(), moved = movedHere)
+        val list = AnmpDeviceList(cert.root, cert.n, (stored?.list?.seq ?: 0) + 1, now(), me.inbox.bytes, devices, stored?.list?.revoked.orEmpty(), listMailbox)
         val proof = AnmpPersons.proof(certSigned, AnmpPersons.signList(me.person, list))
         val p = AnmpPersons.verify(proof) ?: return
         update { s -> s.copy(ownProof = B64.encode(p.proof)) }
@@ -490,7 +514,7 @@ class AnmpCore(
     }
 
     private fun deviceInfos(p: AnmpPerson): List<DeviceInfo> =
-        p.list.devices.mapIndexed { i, d -> DeviceInfo(B64.encode(p.deviceIds[i]), d.name.orEmpty(), d.added, d.node ?: 0) }
+        p.list.devices.mapIndexed { i, d -> DeviceInfo(B64.encode(p.deviceIds[i]), d.name.orEmpty(), d.added, d.node ?: 0, d.moved) }
 
     /**
      * Adds a device to the own list (ADR 0042 §5) and returns the new chain (b64u) to hand over together with the person
@@ -505,7 +529,8 @@ class AnmpCore(
         val id = AnmpKeys.deviceIdOf(sk)
         if (cur.isRevoked(id)) return@onCore null
         if (cur.device(id) != null) return@onCore B64.encode(cur.proof)
-        val entry = AnmpDeviceEntry(sk, x, name.trim().take(AnmpLinks.MAX_NAME).takeIf { it.isNotEmpty() }, now())
+        // A device added now has nothing sealed for it from before ADR 0107.
+        val entry = AnmpDeviceEntry(sk, x, name.trim().take(AnmpLinks.MAX_NAME).takeIf { it.isNotEmpty() }, now(), moved = true)
         changeOwnList(cur.list.devices + entry, cur.list.revoked)?.let { B64.encode(it.proof) }
     }
 
@@ -518,7 +543,7 @@ class AnmpCore(
         val i = cur.deviceIds.indexOfFirst { it.contentEquals(me.device.deviceId) }.takeIf { it >= 0 } ?: return@onCore
         val d = cur.list.devices[i]
         if (d.name == n) return@onCore
-        changeOwnList(cur.list.devices.mapIndexed { j, e -> if (j == i) AnmpDeviceEntry(e.signKey, e.key, n, e.added, e.node) else e }, cur.list.revoked, quiet = true)
+        changeOwnList(cur.list.devices.mapIndexed { j, e -> if (j == i) AnmpDeviceEntry(e.signKey, e.key, n, e.added, e.node, e.moved) else e }, cur.list.revoked, quiet = true)
     }
 
     /** Removes an own device for good (ADR 0042 §6); it stops once it sees the new list. `false` for this device or if unknown. */
@@ -553,6 +578,7 @@ class AnmpCore(
         val list = AnmpDeviceList(
             cur.root, cur.cert.n + 1, 1, now(), inboxKey.key.bytes, keep.map { cur.list.devices[it] },
             (cur.list.revoked + stolenIds).distinctBy { B64.encode(it) },
+            AnmpMailbox.of(inbox).publicKey,
         )
         val p = AnmpPersons.verify(AnmpPersons.proof(certSigned, AnmpPersons.signList(personKey, list))) ?: return@onCore false
         // The stolen devices knew the state secret, which names the person key: a new one, named in the Kern-space of the
@@ -644,7 +670,8 @@ class AnmpCore(
                 if (r.entries.isNotEmpty()) sp.delete(r.entries.keys)
                 true
             } ?: true
-            files && vault && profile
+            val devices = moveOldDeviceSpace(old)
+            files && vault && profile && devices
         }
         if (done || now() - state.previousStoreSince > STORE_CLEANUP_KEEP) onCore {
             update { s -> s.copy(previousStore = null, previousStoreSince = 0) }
@@ -699,7 +726,7 @@ class AnmpCore(
     private suspend fun changeOwnList(devices: List<AnmpDeviceEntry>, revoked: List<ByteArray>, quiet: Boolean = false): AnmpPerson? {
         val cur = own ?: return null
         if (devices.size > AnmpPersons.MAX_DEVICES || revoked.size > AnmpPersons.MAX_REVOKED) return null
-        val list = AnmpDeviceList(cur.root, cur.cert.n, cur.list.seq + 1, now(), me.inbox.bytes, devices, revoked)
+        val list = AnmpDeviceList(cur.root, cur.cert.n, cur.list.seq + 1, now(), me.inbox.bytes, devices, revoked, listMailbox)
         val p = AnmpPersons.verify(AnmpPersons.proof(cur.certSigned, AnmpPersons.signList(me.person, list))) ?: return null
         update { s -> s.copy(ownProof = B64.encode(p.proof)) }
         setOwn(p)
@@ -830,6 +857,12 @@ class AnmpCore(
     }
 
     /** The own other devices as recipients. */
+    /** The own mailbox recipient as a recipient of own copies (ADR 0107). */
+    /** The own mailbox recipient as named in the own list (ADR 0107); `null` only in tests of the old form. */
+    private val listMailbox: ByteArray? get() = me.mailbox.publicKey.takeUnless { config.legacyDirect }
+
+    private val ownMailbox: Peer get() = Peer(B64.encode(me.mailbox.id), B64.encode(me.mailbox.publicKey), person = true)
+
     private fun ownOthers(): List<Peer> {
         val p = own ?: return emptyList()
         return p.list.devices.indices.map { Peer(B64.encode(p.deviceIds[it]), B64.encode(p.list.devices[it].key)) }.filter { it.deviceId != me.deviceId }
@@ -839,6 +872,30 @@ class AnmpCore(
 
     private fun isRevoked(deviceId: String): Boolean =
         state.persons.any { deviceId in it.revoked } || own?.isRevoked(B64.decode(deviceId)) == true
+
+    /**
+     * Person a device belongs or belonged to: like [personOf], and a revoked device still names its person (spec "Persons
+     * and devices", rule 4), e.g. the old phone after recovering with the emergency card. For the app to attribute
+     * messages it already keeps; never for checks or sending.
+     */
+    suspend fun personOfDevice(deviceId: String): String = onCore { revokedOwner(deviceId)?.first ?: personOf(deviceId) }
+
+    /** Person of a revoked device and the time (ms) of the list that names it revoked; `null` if not revoked. */
+    private fun revokedOwner(deviceId: String): Pair<String, Long>? {
+        val raw = runCatching { B64.decode(deviceId) }.getOrNull() ?: return null
+        own?.takeIf { it.isRevoked(raw) }?.let { return it.personIdText to it.list.ts }
+        val s = state.persons.firstOrNull { deviceId in it.revoked } ?: return null
+        return s.personId to (parsedProof(s)?.list?.ts ?: 0)
+    }
+
+    /**
+     * Author of a message in a circle history (ADR 0014): a revoked device still belongs to its person for what it
+     * wrote before; `null` drops what it wrote after the list that names it revoked.
+     */
+    private fun historyAuthorOf(deviceId: String, tsMillis: Long): String? {
+        val (person, listTs) = revokedOwner(deviceId) ?: return personOf(deviceId)
+        return person.takeIf { tsMillis <= listTs }
+    }
 
     /**
      * Person of a device: the own person for an own device, a person whose list names it, a member entry; else the
@@ -860,8 +917,13 @@ class AnmpCore(
     private suspend fun acceptSender(o: Opened): String? {
         if (isRevoked(o.fromDevice)) return null
         val known = personOf(o.fromDevice)
-        val raw = o.content.person ?: return known
-        val p = AnmpPersons.verify(raw) ?: return known
+        val carried = o.content.person?.let { AnmpPersons.verify(it) }
+        // Unsigned (to a mailbox recipient, ADR 0107): the pair key proves the device whose X25519 key it used; that key
+        // must be the one the person's chain lists for the device (or the one pinned for a member without a chain).
+        val chain = carried ?: if (known == ownPersonId) own else personState(known)?.let(::parsedProof)
+        if (!o.message.signed && !o.forwarded && !keyListed(o, chain)) return null
+        if (o.content.person == null) return known
+        val p = carried ?: return known
         val device = B64.decode(o.fromDevice)
         if (p.device(device) == null) return null
         val pid = p.personIdText
@@ -874,12 +936,12 @@ class AnmpCore(
         val revoked = (s?.revoked.orEmpty() + p.list.revoked.map(B64::encode)).distinct()
         when {
             s == null -> {
-                parsedProofs[B64.encode(p.proof)] = p
+                cacheProof(B64.encode(p.proof), p)
                 update { st -> st.copy(persons = st.persons + PersonState(pid, B64.encode(p.proof), p.cert.n, p.list.seq, revoked)) }
             }
             p.cert.n > s.n || (p.cert.n == s.n && p.list.seq > s.seq) -> {
                 val before = parsedProofs[s.proof] ?: AnmpPersons.verify(B64.decode(s.proof))
-                parsedProofs[B64.encode(p.proof)] = p
+                cacheProof(B64.encode(p.proof), p)
                 update { st -> st.copy(persons = st.persons.map { if (it.personId == pid) PersonState(pid, B64.encode(p.proof), p.cert.n, p.list.seq, revoked, it.conflict) else it }) }
                 onPersonChanged(pid, before, p, revoked)
             }
@@ -904,11 +966,26 @@ class AnmpCore(
         val known = state.members.filter { it.circleId == MemberState.CONTACTS && it.person == pid }
         val name = known.firstOrNull()?.name ?: return
         val inbox = B64.encode(p.list.inbox)
+        val added = mutableListOf<String>()
         p.list.devices.forEachIndexed { i, d ->
             val id = B64.encode(p.deviceIds[i])
             if (known.any { it.deviceId == id } || isRevoked(id)) return@forEachIndexed
             val (ok, _) = upsertMember(MemberState(MemberState.CONTACTS, id, name, B64.encode(d.key), B64.encode(d.signKey), inbox = inbox, personId = pid))
-            if (ok) cs.launch { sendProfileTo(id) }
+            if (ok) added += id
+        }
+        sendProfilesTo(p, added)
+    }
+
+    /**
+     * A profile for the new devices [ids] of [p]'s person: to its mailbox recipient once, if no grant for it was given
+     * yet (it reaches every device, ADR 0107); for older chains one per device.
+     */
+    private fun sendProfilesTo(p: AnmpPerson, ids: List<String>) {
+        if (ids.isEmpty()) return
+        if (mailboxTargetOf(p) == null) {
+            ids.forEach { id -> cs.launch { sendProfileTo(id) } }
+        } else if (!hasIssued(grantPurposeOf(ids.first()))) {
+            cs.launch { sendProfileTo(ids.first()) }
         }
     }
 
@@ -921,15 +998,17 @@ class AnmpCore(
         val isContact = state.members.any { it.circleId == MemberState.CONTACTS && it.person == pid }
         val name = state.members.firstOrNull { it.person == pid }?.name.orEmpty()
         val added = mutableListOf<DeviceInfo>()
+        val newContacts = mutableListOf<String>()
         p.list.devices.forEachIndexed { i, d ->
             val id = newIds[i]
             if (id in oldIds) return@forEachIndexed
             added += DeviceInfo(id, d.name.orEmpty(), d.added, d.node ?: 0)
             if (isContact) {
                 upsertMember(MemberState(MemberState.CONTACTS, id, name, B64.encode(d.key), B64.encode(d.signKey), inbox = B64.encode(p.list.inbox), personId = pid))
-                cs.launch { sendProfileTo(id) }
+                newContacts += id
             }
         }
+        sendProfilesTo(p, newContacts)
         if (before != null && (added.isNotEmpty() || gone.isNotEmpty())) emit(CoreEvent.DevicesChanged(pid, own = false, added = added, removed = gone.distinct()))
     }
 
@@ -1015,11 +1094,13 @@ class AnmpCore(
                 p === hi && theirs != mine -> mine
                 else -> maxOf(theirs, mine)
             }
-            entries[id] = AnmpDeviceEntry(e.signKey, e.key, name, minOf(e.added, prev?.added ?: e.added), e.node ?: prev?.node)
+            entries[id] = AnmpDeviceEntry(e.signKey, e.key, name, minOf(e.added, prev?.added ?: e.added), e.node ?: prev?.node, e.moved || prev?.moved == true)
         }
         val devices = entries.entries.sortedBy { it.key }.map { it.value }
         if (devices.isEmpty() || devices.size > AnmpPersons.MAX_DEVICES) return
-        val list = AnmpDeviceList(hi.root, hi.cert.n, hi.list.seq + 1, maxOf(hi.list.ts, lo.list.ts), hi.list.inbox, devices, revoked)
+        // Every own device derives the same mailbox recipient from the mailbox owner seed, so both sides get the same bytes.
+        val mailbox = if (hi.list.inbox.contentEquals(me.inbox.bytes)) listMailbox else hi.list.mailbox
+        val list = AnmpDeviceList(hi.root, hi.cert.n, hi.list.seq + 1, maxOf(hi.list.ts, lo.list.ts), hi.list.inbox, devices, revoked, mailbox)
         val merged = AnmpPersons.verify(AnmpPersons.proof(hi.certSigned, AnmpPersons.signList(me.person, list))) ?: return
         val oldIds = a.deviceIds.map(B64::encode)
         update { s -> s.copy(ownProof = B64.encode(merged.proof)) }
@@ -1063,6 +1144,7 @@ class AnmpCore(
     /** Target for one device (profile, key change, history, forwarding). */
     private fun targetOfDevice(deviceId: String): Target? {
         val pid = personOf(deviceId)
+        personState(pid)?.let(::parsedProof)?.takeIf { p -> p.deviceIds.any { B64.encode(it) == deviceId } }?.let(::mailboxTargetOf)?.let { return it }
         targetsOf(pid).firstOrNull { it.peer.deviceId == deviceId }?.let { return it }
         return (state.members.lastOrNull { it.deviceId == deviceId && it.inbox != null } ?: anyMember(deviceId))?.let(::targetOfMember)
     }
@@ -1071,9 +1153,46 @@ class AnmpCore(
 
     private fun parsedProof(s: PersonState): AnmpPerson? = parsedProofs[s.proof]
 
+    /** Mailbox recipient ID per mailbox space (b64u), filled with the parsed chains: ID derivation is suspending. */
+    private val mailboxIds = mutableMapOf<String, ByteArray>()
+
+    private suspend fun cacheProof(key: String, p: AnmpPerson) {
+        parsedProofs[key] = p
+        val inbox = B64.encode(p.list.inbox)
+        if (p.list.mailbox != null && inbox !in mailboxIds) mailboxIds[inbox] = AnmpKeys.mailboxIdOf(p.list.inbox)
+    }
+
+    /**
+     * The one recipient of everything to [p]'s person (ADR 0107 §1, §3): its mailbox recipient (ADR 0084), if the chain
+     * names it; `null` for chains from before.
+     */
+    private fun mailboxTargetOf(p: AnmpPerson): Target? {
+        val key = p.list.mailbox ?: return null
+        val inbox = B64.encode(p.list.inbox)
+        val id = mailboxIds[inbox] ?: return null
+        return Target(Peer(B64.encode(id), B64.encode(key), person = true), inbox, legacy = false, mailbox = true)
+    }
+
+    /** `true` if [p] lists the sending device of [o] with exactly the keys that opened and named it. */
+    private fun keyListed(o: Opened, p: AnmpPerson?): Boolean {
+        if (p == null) return pinnedKey(o.fromDevice) == o.fromKey
+        val e = p.device(B64.decode(o.fromDevice)) ?: return false
+        return B64.encode(e.key) == o.fromKey && B64.encode(e.signKey) == o.fromSignKey
+    }
+
+    /** Purpose of the personal grant for [deviceId]: per mailbox recipient once the chain names one, else per device. */
+    private fun grantPurposeOf(deviceId: String): String =
+        targetOfDevice(deviceId)?.takeIf { it.mailbox }?.let { contactPurpose(it.peer.deviceId) } ?: contactPurpose(deviceId)
+
+    /** Recipients of everything to [person]: its mailbox recipient, else (older chains) each of its devices. */
+    private fun recipientsOf(person: String): List<Target> {
+        personState(person)?.let(::parsedProof)?.let(::mailboxTargetOf)?.let { return listOf(it) }
+        return targetsOf(person)
+    }
+
     /** Fills the cache of parsed chains (they verify once when stored). */
     private suspend fun warmProofs() {
-        for (s in state.persons) if (s.proof !in parsedProofs) AnmpPersons.verify(B64.decode(s.proof))?.let { parsedProofs[s.proof] = it }
+        for (s in state.persons) if (s.proof !in parsedProofs) AnmpPersons.verify(B64.decode(s.proof))?.let { cacheProof(s.proof, it) }
     }
 
     // --- Seen IDs (dedup across relays and restarts) --------------------------------------------
@@ -1455,7 +1574,7 @@ class AnmpCore(
             pool.ok(relay.node)
             for (o in page.objects) handleListed(l, relay, o)
             found += page.objects.size
-            if (page.next.isEmpty() || page.next == after) return found
+            if (page.next.isEmpty() || page.next == after) return found.also { caughtUp(l) }
             after = page.next
             platform.store.putString(key, after)
             if (page.objects.isEmpty()) return found
@@ -1482,6 +1601,7 @@ class AnmpCore(
                     platform.store.putString(key, after)
                 }
                 if (page.objects.isEmpty()) {
+                    caughtUp(l)
                     val took = now() - started
                     if (background.value) {
                         val left = timings.backgroundPollInterval.inWholeMilliseconds - took
@@ -1532,6 +1652,7 @@ class AnmpCore(
         }
         val packet = openEnvelope(l, data) ?: return
         val opened = Packets.open(me, packet, l.scope, (l as? Listed.Circle)?.keys, ::peerByTag) ?: return
+        if (l is Listed.Inbox) sawViaInternet(opened)
         runCatching { dispatch(l, id, opened, meta.grant?.hash?.toString()) }.onFailure { e ->
             if (e is CancellationException) throw e
             log.log("entry ${id.take(8)}: ${e.message}")
@@ -1552,7 +1673,7 @@ class AnmpCore(
             return
         }
         val person = acceptSender(o) ?: return
-        if (revokedHere) return
+        if (revokedHere || erasing) return
         when (l) {
             is Listed.Inbox -> if (person == ownPersonId && !o.forwarded) onOwnDevice(l, objectId, o) else {
                 // The grant in a channel link lets anyone with the link write to us, but only to announce themselves (ADR 0062 §11).
@@ -1572,14 +1693,20 @@ class AnmpCore(
         val c = o.content
         val peer = c.peer?.takeIf { it.size == Anmp.DEVICE_BYTES }?.let(B64::encode)
         val conversation = c.circle?.let { Conversation.Circle(it) } ?: peer?.let { Conversation.Direct(it) }
+        // Copy of a packet the conversation partner sent (ADR 0107): it counts as from its author, a device of that person.
+        val author = c.author?.takeIf { it.size == Anmp.DEVICE_BYTES && peer != null }?.let(B64::encode)
+            ?.takeIf { a -> personOf(a).let { it == peer || it == a } }
+        if (c.author != null && author == null) return
+        val from = author ?: o.fromDevice
         when (o.kind) {
             AnmpKind.DIRECT -> if (peer != null) {
                 val space = targetsOf(peer).firstOrNull()?.inbox?.takeIf { it.isNotEmpty() } ?: l.access.name
-                messageEvent(Conversation.Direct(peer), objectId, space, o, person = ownPersonId)?.let { emitReceived(it, l.access.space, objectId) }
+                messageEvent(Conversation.Direct(peer), objectId, space, o, person = if (author != null) peer else ownPersonId, fromDevice = from)
+                    ?.let { emitReceived(it, l.access.space, objectId) }
             }
-            AnmpKind.REACT -> if (conversation != null) reactionEvent(conversation, o)?.let { emit(it) }
+            AnmpKind.REACT -> if (conversation != null) reactionEvent(conversation, o, fromDevice = from)?.let { emit(it) }
             AnmpKind.DELETE -> if (conversation != null) {
-                val d = deleteEvent(conversation, o.fromDevice, o.content)
+                val d = deleteEvent(conversation, from, o.content)
                 if (conversation is Conversation.Direct) emitDeleted(d) else d?.let { emit(it) }
             }
             AnmpKind.READ -> if (conversation != null) {
@@ -1646,6 +1773,7 @@ class AnmpCore(
 
     private suspend fun onInbox(l: Listed.Inbox, objectId: String, o: Opened, known: Boolean, person: String) {
         if (!o.toUs) return
+        reachableAgain(person)
         val c = o.content
         if (o.forwarded) {
             // Radio packet put into our mailbox by an app at a shared radio (ADR 0022); opened like over radio.
@@ -1669,7 +1797,7 @@ class AnmpCore(
             )
             if (!ok) return
             c.grant?.let { acceptGrant(o.fromDevice, c.inbox, it, null) }
-            if (isNew || !hasIssued(contactPurpose(o.fromDevice))) cs.launch { sendProfileTo(o.fromDevice) }
+            if (isNew || !hasIssued(grantPurposeOf(o.fromDevice))) cs.launch { sendProfileTo(o.fromDevice) }
             adoptDevicesOf(person)
         }
         val conversation = Conversation.Direct(person)
@@ -1711,7 +1839,10 @@ class AnmpCore(
         }
     }
 
-    private fun messageEvent(conversation: Conversation, objectId: String, space: String, o: Opened, history: Boolean = false, person: String = personOf(o.fromDevice)): CoreEvent.Message? {
+    private fun messageEvent(
+        conversation: Conversation, objectId: String, space: String, o: Opened, history: Boolean = false, person: String = personOf(o.fromDevice),
+        fromDevice: String = o.fromDevice,
+    ): CoreEvent.Message? {
         val c = o.content
         val text = c.text.orEmpty()
         val attachments = c.attachments.orEmpty().take(MAX_ATTACHMENTS).filter { it.id.size == Anmp.BLOB_ID_BYTES && it.key.size == 32 && it.size > 0 }
@@ -1724,7 +1855,7 @@ class AnmpCore(
             )
         }
         return CoreEvent.Message(
-            conversation, objectId, space, c.id?.takeIf { it.size == Anmp.ID_BYTES }?.let(B64::encode), o.fromDevice, c.name.orEmpty(), c.node ?: 0,
+            conversation, objectId, space, c.id?.takeIf { it.size == Anmp.ID_BYTES }?.let(B64::encode), fromDevice, c.name.orEmpty(), c.node ?: 0,
             text, c.ts * 1000, attachments,
             imageHash = c.imageHash?.takeIf { it.size == 16 }?.let(B64::encode), imageTs = c.imageTs ?: 0,
             circleImageHash = c.circleImageHash?.takeIf { it.size == 16 }?.let(B64::encode),
@@ -1754,13 +1885,13 @@ class AnmpCore(
         return CoreEvent.Deleted(conversation, fromDevice, B64.encode(author), B64.encode(ref), c.ts * 1000)
     }
 
-    private fun reactionEvent(conversation: Conversation, o: Opened, objectId: String = ""): CoreEvent.Reaction? {
+    private fun reactionEvent(conversation: Conversation, o: Opened, objectId: String = "", fromDevice: String = o.fromDevice): CoreEvent.Reaction? {
         val c = o.content
         val ref = c.ref?.takeIf { it.size == Anmp.ID_BYTES } ?: return null
         val author = c.refFrom?.takeIf { it.size == Anmp.TAG_BYTES } ?: return null
         val emoji = c.emoji ?: return null
         if (emoji.length > 16) return null
-        return CoreEvent.Reaction(conversation, o.fromDevice, B64.encode(author), B64.encode(ref), emoji, c.ts * 1000, objectId)
+        return CoreEvent.Reaction(conversation, fromDevice, B64.encode(author), B64.encode(ref), emoji, c.ts * 1000, objectId)
     }
 
     private fun haveEvent(c: AnmpContent): CoreEvent.Have? {
@@ -1947,7 +2078,7 @@ class AnmpCore(
         lifetime: Duration? = null,
     ): Boolean {
         var any = false
-        val targets = targetsOf(person)
+        val targets = recipientsOf(person)
         val waking = wakingTargets(targets)
         for (t in targets) {
             if (postTo(t, kind, content, if (any) emptyList() else contents, ref, notify && t in waking, lifetime)) any = true
@@ -1964,7 +2095,8 @@ class AnmpCore(
     /** Writes a packet for each own other device into the own mailbox (copies, read state, snapshot). */
     private suspend fun postOwn(kind: AnmpKind, content: AnmpContent, lifetime: Duration? = null) {
         if (revokedHere) return
-        for (peer in ownOthers()) postOwnTo(peer, kind, content, lifetime)
+        // One copy for the own mailbox recipient (ADR 0107 §2): every own device reads it, also one added later.
+        if (config.legacyDirect) ownOthers().forEach { postOwnTo(it, kind, content, lifetime) } else postOwnTo(ownMailbox, kind, content, lifetime)
     }
 
     private suspend fun postOwnTo(
@@ -2426,13 +2558,38 @@ class AnmpCore(
             revoke(contactPurpose(it))
         }
         addTombstone(person)
+        reachableAgain(person)
+    }
+
+    /**
+     * Every holder refused a message for the mailbox [space] with 403 ([Transport]): marks each other person with that
+     * mailbox as unreachable (ADR 0046). Never the own person: our own mailbox refusing us is a different fault.
+     */
+    private suspend fun onMailboxDenied(space: String) {
+        val own = ownPersonId
+        val persons = state.members.map { it.person }.distinct()
+            .filter { it != own && it !in state.unreachable }
+            .filter { p -> targetsOf(p).any { it.inbox == space } || mailboxTargetOf(p)?.inbox == space }
+        if (persons.isEmpty()) return
+        val t = now()
+        log.log("mailbox ${space.take(8)} refuses us: ${persons.size} person(s) unreachable")
+        update { s -> s.copy(unreachable = s.unreachable + persons.associateWith { t }) }
+        persons.forEach { emit(CoreEvent.ContactUnreachable(it, t)) }
+    }
+
+    /** Clears the mark of [person] set by [onMailboxDenied]. */
+    private suspend fun reachableAgain(person: String) {
+        if (person !in state.unreachable) return
+        update { s -> s.copy(unreachable = s.unreachable - person) }
+        emit(CoreEvent.ContactReachable(person))
     }
 
     /** Profile with own picture and a personal grant for [deviceId] (kind `profile`). */
     private suspend fun sendProfileTo(deviceId: String): Boolean {
         val m = anyMember(deviceId) ?: return false
-        val grant = grantFor(contactPurpose(deviceId), m.signKey?.let { Key.parse(it) })
         val t = targetOfDevice(deviceId) ?: return false
+        // To the mailbox recipient every device of the person opens it: a grant for any of them, like the link grant.
+        val grant = if (t.mailbox) grantFor(contactPurpose(t.peer.deviceId), null) else grantFor(contactPurpose(deviceId), m.signKey?.let { Key.parse(it) })
         val a = peerAccess(t) ?: return false
         val own = ownImageFor(a.space)
         val p = state.profile
@@ -2523,7 +2680,7 @@ class AnmpCore(
         opened.await()
         val reply = replyBytes(replyTo, replyFrom)
         val person = personOf(id)
-        val targets = targetsOf(person)
+        val targets = recipientsOf(person)
         if (targets.isEmpty()) return@onCore null
         val mid = messageIdOf(mid)
         val midText = B64.encode(mid)
@@ -2537,7 +2694,7 @@ class AnmpCore(
         val mailbox = mailboxTargetOf(person)
         val waking = wakingTargets(targets)
         for (t in targets + listOfNotNull(mailbox)) {
-            val grant = if (t === mailbox) {
+            val grant = if (t === mailbox || t.mailbox) {
                 grantFor(contactPurpose(t.peer.deviceId), null)
             } else {
                 anyMember(t.peer.deviceId)?.signKey?.let { grantFor(contactPurpose(t.peer.deviceId), Key.parse(it)) }
@@ -3309,7 +3466,8 @@ class AnmpCore(
             .mapNotNull { opened ->
                 val o = Packets.openHistory(opened, h.circle)?.takeIf { it.kind == AnmpKind.CIRCLE } ?: return@mapNotNull null
                 val id = "history:${o.fromDevice}:${o.content.id?.let(B64::encode) ?: o.content.ts}"
-                messageEvent(Conversation.Circle(h.circle), id, "", o, history = true)
+                val author = historyAuthorOf(o.fromDevice, o.content.ts * 1000) ?: return@mapNotNull null
+                messageEvent(Conversation.Circle(h.circle), id, "", o, history = true, person = author)
             }
         h.parts.forEach { part ->
             val g = part.grant?.let { runCatching { Grant.decode(it) }.getOrNull() } ?: return@forEach
@@ -3967,10 +4125,16 @@ class AnmpCore(
         private set
 
     private fun createRadio(port: RadioPort, host: RadioHost, timings: RadioTimings) {
-        val keys = RadioKeys(me.device) { nowS() }
+        val keys = RadioKeys(me.device, me.mailbox) { nowS() }
         radioKeys = keys
         radio = RadioWay(cs, object : RadioCore {
             override val keys = keys
+
+            override fun copyFromRadio(kind: AnmpKind, content: AnmpContent, fromDevice: String) = this@AnmpCore.copyFromRadio(kind, content, fromDevice)
+
+            override fun radioPeer(deviceId: String): Peer? = targetOfDevice(deviceId)?.peer
+                ?: state.members.firstOrNull { it.deviceId == deviceId }?.let { Peer(it.deviceId, it.publicKey) }
+
             override val circles: List<CircleState> get() = state.circles.filterNot { it.removed }
             override val members: List<MemberState> get() = state.members
             override val hasInbox: Boolean get() = radioInbox != null
@@ -4596,6 +4760,15 @@ class AnmpCore(
     }
 
     /**
+     * Code of the last [createEmergencyCard] that was not confirmed yet (`K7QM-…`), `null` if there is none. The card is
+     * already in the Kern-space (and an older one deleted): the app shows this code again instead of making a new card,
+     * e.g. after the dialog was closed before typing it. Shown only on this device, which still holds the root key.
+     */
+    suspend fun pendingEmergencyCard(): String? = onCore {
+        platform.secrets.get(PENDING_CODE)?.takeIf { it.size == RecoveryCode.BYTES }?.let(RecoveryCode::format)
+    }
+
+    /**
      * The person typed the code once (ADR 0023): if it matches the last [createEmergencyCard], the root key is deleted
      * from this device; from now on it lies only in the Kern-space. `false` if it does not match.
      */
@@ -4734,6 +4907,214 @@ class AnmpCore(
     private fun newestVault(entries: Collection<ByteArray>): VaultEntry? =
         entries.mapNotNull { runCatching { coreCbor.decodeFromByteArray(VaultEntry.serializer(), it) }.getOrNull() }.maxByOrNull { it.changed }
 
+    // --- Moving the own mailbox to the person (ADR 0107 §6) ------------------------------------------
+
+    /**
+     * Once per device: every entry of the own mailbox that was sealed for this device (before ADR 0107) and is part of a
+     * conversation (direct, react, delete) is written again as an own copy to the own mailbox recipient, so every own
+     * device, also one back from the emergency card, reads it. Received ones name their author (content 37). Then the old
+     * entry goes, unless it still carries attachments younger than 30 days. Entries for devices that are no longer in
+     * the own list cannot be read by anyone and go too. Runs until it got through once; `true` then.
+     */
+    suspend fun migrateMailbox(): Boolean = migrateLock.withLock { onCore { migrateOnce() } }
+
+    /** One run at a time: the reads below suspend, and a second run would write the copies again. */
+    private val migrateLock = Mutex()
+
+    private suspend fun migrateOnce(): Boolean {
+        opened.await()
+        if (state.mailboxMigrated) return true
+        if (revokedHere || erasing) return false
+        val a = ownAccess()
+        val l = Listed.Inbox(a)
+        val listed = listOwnMailbox(a) ?: return false
+        val ownIds = own?.deviceIds?.map { Anmp.tagOf(it) }.orEmpty()
+        // Messages already in the form to the person (copies of another own device): not again.
+        val done = mutableSetOf<String>()
+        val old = mutableListOf<Pair<ID, Opened>>()
+        val unreadable = mutableListOf<ID>()
+        for ((id, data) in listed) {
+            val packet = openEnvelope(l, data) ?: continue
+            val to = Anmp.peek(packet)?.to ?: continue
+            when {
+                to.contentEquals(me.mailbox.tag) -> Packets.open(me, packet, l.scope, null, ::peerByTag)
+                    ?.let { o -> o.content.id?.let { done += o.kind.name + B64.encode(it) } }
+                to.contentEquals(me.tag) -> Packets.open(me, packet, l.scope, null, ::peerByTag)?.let { old += id to it }
+                // Sealed for an own device that is gone: nobody can open it any more.
+                ownIds.none { it.contentEquals(to) } -> unreadable += id
+            }
+        }
+        val mine = me.device
+        val cutoff = nowS() - ATTACHMENT_KEEP_S
+        for ((id, o) in old) {
+            if (o.kind != AnmpKind.DIRECT && o.kind != AnmpKind.REACT && o.kind != AnmpKind.DELETE) continue
+            val mid = o.content.id?.let { o.kind.name + B64.encode(it) }
+            if (mid != null && mid !in done) {
+                val fromOwn = personOf(o.fromDevice) == ownPersonId
+                val peer = if (fromOwn) o.content.peer else B64.decode(personOf(o.fromDevice)).takeIf { it.size == Anmp.DEVICE_BYTES }
+                if (peer == null) continue
+                val copy = o.content.asCopy(peer, if (fromOwn) null else B64.decode(o.fromDevice), mine.publicKey, mine.signKey)
+                postOwnTo(ownMailbox, o.kind, copy)
+                done += mid
+            }
+            // Attachments live with their entry: it stays until they expire anyway.
+            if (o.content.attachments.isNullOrEmpty() || o.content.ts < cutoff) transport.delete(a.cred, a.space, id, entry = true)
+        }
+        unreadable.forEach { transport.delete(a.cred, a.space, it, entry = true) }
+        update { s -> s.copy(mailboxMigrated = true) }
+        markMoved()
+        log.log("mailbox moved to the person: ${old.size} old entries, ${unreadable.size} unreadable removed")
+        return true
+    }
+
+    /** Every entry of the own mailbox with its bytes, from the first holders that answer; `null` if none answered. */
+    private suspend fun listOwnMailbox(a: SpaceAccess): Map<ID, ByteArray>? {
+        val listed = mutableMapOf<ID, ByteArray>()
+        var answered = false
+        for (relay in net.readOrder(a.name).take(4)) {
+            val client = pool.client(relay) ?: continue
+            try {
+                var after = ""
+                while (true) {
+                    val page = client.list(a.cred, a.space, ListOptions(after, 0, 200))
+                    for (o in page.objects) {
+                        if (o.id in listed || o.revokes != null) continue
+                        (o.inline() ?: client.get(a.cred, a.space, o.id).data).let { listed[o.id] = it }
+                    }
+                    if (page.next.isEmpty() || page.next == after) break
+                    after = page.next
+                }
+                answered = true
+                pool.ok(relay.node)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: AndpHttpException) {
+                pool.ok(relay.node)
+                if (e.isNotFound) answered = true
+            } catch (_: Exception) {
+            }
+        }
+        return listed.takeIf { answered }
+    }
+
+    /**
+     * Writes the app's own direct history [items] once as own copies into the own mailbox (ADR 0107 §6): what a person
+     * with only one device sent lay only in the recipients' mailboxes. Items whose message is already there in the form
+     * to the person are left out. Only installations from before ADR 0107; `true` once done (also when nothing was due).
+     */
+    suspend fun keepOwnHistory(items: List<OwnHistoryItem>): Boolean = migrateLock.withLock {
+        onCore {
+            opened.await()
+            if (state.historyKept || config.legacyDirect) return@onCore true
+            if (revokedHere || erasing) return@onCore false
+            val a = ownAccess()
+            val l = Listed.Inbox(a)
+            val listed = listOwnMailbox(a) ?: return@onCore false
+            val there = mutableSetOf<String>()
+            for (data in listed.values) {
+                val packet = openEnvelope(l, data) ?: continue
+                if (Anmp.peek(packet)?.to?.contentEquals(me.mailbox.tag) != true) continue
+                Packets.open(me, packet, l.scope, null, ::peerByTag)?.takeIf { it.kind == AnmpKind.DIRECT }?.content?.id?.let { there += B64.encode(it) }
+            }
+            var written = 0
+            for (item in items) {
+                if (item.mid in there) continue
+                val id = runCatching { B64.decode(item.mid) }.getOrNull()?.takeIf { it.size == Anmp.ID_BYTES } ?: continue
+                val peer = runCatching { B64.decode(personOf(item.peerPerson)) }.getOrNull()?.takeIf { it.size == Anmp.DEVICE_BYTES } ?: continue
+                val author = item.author?.let { runCatching { B64.decode(it) }.getOrNull()?.takeIf { b -> b.size == Anmp.DEVICE_BYTES } ?: continue }
+                val reply = replyBytes(item.replyTo, item.replyFrom)
+                val c = AnmpContent(
+                    id = id, ts = item.tsMillis / 1000, text = item.text, ref = reply?.first, refFrom = reply?.second,
+                    key = me.device.publicKey, signKey = me.device.signKey, attachments = item.attachments.takeIf { it.isNotEmpty() },
+                    peer = peer, author = author,
+                )
+                postOwnTo(ownMailbox, AnmpKind.DIRECT, c)
+                there += item.mid
+                written++
+            }
+            update { s -> s.copy(historyKept = true) }
+            markMoved()
+            log.log("own history kept: $written of ${items.size}")
+            true
+        }
+    }
+
+    // --- Loading after adding or recovering (ADR 0107 §8) -------------------------------------------------
+
+    private val _loading = MutableStateFlow(HistoryLoading(mailbox = false, circles = emptyList()))
+
+    /**
+     * What this device has not read through once yet: its own mailbox (direct conversations) and circle spaces. The app
+     * shows „Nachrichten werden geladen …“ while something is in it. Empty on installations that already ran.
+     */
+    val loading: StateFlow<HistoryLoading> = _loading.asStateFlow()
+
+    private fun refreshLoading() {
+        val read = state.circlesRead.toSet()
+        _loading.value = HistoryLoading(
+            mailbox = !state.mailboxRead,
+            circles = state.circles.filterNot { it.removed || it.id in read }.map { it.id },
+        )
+    }
+
+    /** [l] was listed to its end at one holder. */
+    private suspend fun caughtUp(l: Listed) {
+        when (l) {
+            is Listed.Inbox -> if (!state.mailboxRead) update { s -> s.copy(mailboxRead = true) }
+            is Listed.Circle -> if (l.circleId !in state.circlesRead && !l.previous) update { s -> s.copy(circlesRead = s.circlesRead + l.circleId) }
+            else -> Unit
+        }
+    }
+
+    /** Mailbox and own history are in the form to the person here (ADR 0107 §6). */
+    private val movedHere: Boolean get() = state.mailboxMigrated && state.historyKept
+
+    /** Notes [movedHere] in the own entry of the device list once (a quiet list change). */
+    private suspend fun markMoved() {
+        if (!movedHere || revokedHere || config.legacyDirect) return
+        val cur = own ?: return
+        val i = cur.deviceIds.indexOfFirst { it.contentEquals(me.device.deviceId) }
+        if (i < 0 || cur.list.devices[i].moved) return
+        changeOwnList(cur.list.devices.mapIndexed { j, e -> if (j == i) AnmpDeviceEntry(e.signKey, e.key, e.name, e.added, e.node, moved = true) else e }, cur.list.revoked, quiet = true)
+    }
+
+    /** Message IDs (kind + ID) of direct packets that came over the internet lately, so radio copies are not written twice. */
+    private val viaInternet = LinkedHashSet<String>()
+
+    private fun sawViaInternet(o: Opened) {
+        if (o.kind != AnmpKind.DIRECT && o.kind != AnmpKind.REACT && o.kind != AnmpKind.DELETE) return
+        val id = o.content.id ?: return
+        viaInternet += o.kind.name + B64.encode(id)
+        while (viaInternet.size > MAX_SEEN) viaInternet.remove(viaInternet.first())
+    }
+
+    /**
+     * A direct packet of [fromDevice] that came over radio goes into the own mailbox as an own copy after
+     * [CoreTimings.radioCopyWait], unless it came over the internet meanwhile (ADR 0106 §6, 0107 §4). Without internet the write
+     * waits in the transport like any other.
+     */
+    private fun copyFromRadio(kind: AnmpKind, content: AnmpContent, fromDevice: String) {
+        val id = content.id ?: return
+        cs.launch {
+            delay(timings.radioCopyWait)
+            onCore {
+                if (kind.name + B64.encode(id) in viaInternet || revokedHere || erasing) return@onCore
+                val person = personOf(fromDevice).takeIf { it != fromDevice } ?: return@onCore
+                if (person == ownPersonId) return@onCore
+                postOwnTo(ownMailbox, kind, content.asCopy(B64.decode(person), B64.decode(fromDevice), me.device.publicKey, me.device.signKey))
+            }
+        }
+    }
+
+    /** Keeps trying [migrateMailbox] until it got through once, also without internet for a while. */
+    private suspend fun keepMigrating() {
+        var pause = timings.historyRetryMin
+        while (!runCatching { migrateMailbox() }.getOrDefault(false)) {
+            delay(pause)
+            pause = minOf(pause * 2, timings.historyRetryMax)
+        }
+    }
+
     // --- Profile space: name, picture and settings on all own devices (ADR 0050) ---------------------------
 
     /** Profile space: from the store secret, so every own device and the emergency card reach it. */
@@ -4828,6 +5209,119 @@ class AnmpCore(
         true
     }
 
+    // --- Device space: settings of each own device, by device ID (ADR 0106) ---------------------------------
+
+    /** Device space: from the store secret like the profile space, so every own device and the emergency card reach it. */
+    private suspend fun deviceSpace(secret: ByteArray? = platform.secrets.get(StoreKeys.SECRET)): SealedSpace? =
+        secret?.let { SealedSpace.of(it, AnmpInfo.DEVICES_SIGN, AnmpInfo.DEVICES_AEAD, net, pool, transport, me.inboxEnvelope) }
+
+    private var deviceWrite: Job? = null
+
+    /**
+     * Settings of the app that apply to this device only (name → bytes, opaque to the core): radio, region, postponed
+     * notices and the like. Changed values are written to the device space under this device's ID a few seconds later,
+     * so that a phone replacing this one can take them over ([takeOverDevice]). Names not in [values] stay.
+     */
+    suspend fun setDeviceSettings(values: Map<String, ByteArray>): Unit = onCore {
+        val known = state.deviceSettings.associateBy { it.name }
+        val changed = values.filter { (k, v) -> known[k]?.value != B64.encode(v) }
+        if (changed.isEmpty()) return@onCore
+        val t = now()
+        update { s -> s.copy(deviceSettings = s.deviceSettings.filterNot { it.name in changed } + changed.map { (k, v) -> SharedSetting(k, B64.encode(v), t) }) }
+        if (deviceWrite?.isActive != true) {
+            deviceWrite = cs.launch {
+                delay(DEVICE_WRITE_DELAY)
+                runCatching { writeDeviceSettings() }.onFailure { if (it is CancellationException) throw it; log.log("device settings: ${it.message}") }
+            }
+        }
+    }
+
+    /** Settings of this device as known here (name → bytes). */
+    suspend fun deviceSettings(): Map<String, ByteArray> = onCore { state.deviceSettings.associate { it.name to B64.decode(it.value) } }
+
+    private fun deviceEntries(read: SealedSpace.Result): Map<String, DeviceEntry> =
+        read.entries.mapNotNull { (id, bytes) -> runCatching { coreCbor.decodeFromByteArray(DeviceEntry.serializer(), bytes) }.getOrNull()?.let { id to it } }.toMap()
+
+    /**
+     * Writes this device's settings as one entry of the device space and deletes its older entries there. Also deletes
+     * entries of devices that are no longer in the own list and unchanged for [DEVICE_ENTRY_KEEP]. `true` if it wrote.
+     */
+    suspend fun writeDeviceSettings(): Boolean = onCore {
+        opened.await()
+        if (revokedHere) return@onCore false
+        val sp = deviceSpace() ?: return@onCore false
+        val read = sp.read()
+        if (!read.answered) return@onCore false
+        val entries = deviceEntries(read)
+        val mine = B64.decode(me.deviceId)
+        val own = entries.filterValues { it.device.contentEquals(mine) }
+        val current = state.deviceSettings.associate { it.name to ProfileValue(it.ts, B64.decode(it.value)) }
+        val newest = own.values.maxByOrNull { it.changed }
+        val same = newest != null && own.size == 1 && newest.settings.keys == current.keys &&
+            current.all { (k, v) -> newest.settings[k]?.let { it.changed == v.changed && it.data.contentEquals(v.data) } == true }
+        val listed = _ownDevices.value.map { it.deviceId }.toSet()
+        val stale = if (listed.isEmpty()) emptyList() else entries.filter { (_, e) ->
+            B64.encode(e.device) !in listed && !e.device.contentEquals(mine) && now() - e.changed > DEVICE_ENTRY_KEEP
+        }.keys
+        if (stale.isNotEmpty()) sp.delete(stale)
+        if (same || current.isEmpty()) return@onCore false
+        sp.put(coreCbor.encodeToByteArray(DeviceEntry.serializer(), DeviceEntry(mine, now(), current)))
+        if (own.isNotEmpty()) sp.delete(own.keys)
+        true
+    }
+
+    /**
+     * Other own devices with settings in the device space, newest first, for „Ersetzt dieses Handy eins deiner Geräte?“
+     * (ADR 0106 §7). Also devices already removed from the own list, until their entry expires. `null` if no relay answered.
+     */
+    suspend fun storedDevices(): List<StoredDevice>? = onCore {
+        opened.await()
+        val sp = deviceSpace() ?: return@onCore emptyList()
+        val read = sp.read()
+        if (!read.answered) return@onCore null
+        val mine = B64.decode(me.deviceId)
+        deviceEntries(read).values.filterNot { it.device.contentEquals(mine) }
+            .groupBy { B64.encode(it.device) }
+            .map { (id, list) -> list.maxBy { it.changed }.let { StoredDevice(id, it.changed, it.settings.keys.sorted()) } }
+            .sortedByDescending { it.changed }
+    }
+
+    /**
+     * This device replaces the own device [deviceId] (ADR 0106 §7): its settings become this device's (they count as
+     * changed now), are written under this device's ID, and the old device's entries are deleted. Returns the settings
+     * taken over, `null` if nothing is stored for [deviceId] or no relay answered. The old device stays in the own list;
+     * removing it is up to the app (with the device lock).
+     */
+    suspend fun takeOverDevice(deviceId: String): Map<String, ByteArray>? = onCore {
+        opened.await()
+        if (deviceId == me.deviceId) return@onCore null
+        val sp = deviceSpace() ?: return@onCore null
+        val read = sp.read()
+        if (!read.answered) return@onCore null
+        val theirs = deviceEntries(read).filterValues { B64.encode(it.device) == deviceId }
+        val newest = theirs.values.maxByOrNull { it.changed } ?: return@onCore null
+        val t = now()
+        val taken = newest.settings.mapValues { it.value.data }
+        update { s -> s.copy(deviceSettings = s.deviceSettings.filterNot { it.name in taken } + taken.map { (k, v) -> SharedSetting(k, B64.encode(v), t) }) }
+        writeDeviceSettings()
+        sp.delete(theirs.keys)
+        taken
+    }
+
+    /** Device space under the previous store secret into the current one (ADR 0042 §6); `true` once it is empty there. */
+    private suspend fun moveOldDeviceSpace(old: ByteArray): Boolean {
+        val from = deviceSpace(old) ?: return true
+        val to = deviceSpace() ?: return false
+        val r = from.read()
+        if (!r.answered) return false
+        val mine = B64.decode(me.deviceId)
+        deviceEntries(r).values.filterNot { it.device.contentEquals(mine) }
+            .forEach { to.put(coreCbor.encodeToByteArray(DeviceEntry.serializer(), it)) }
+        writeDeviceSettings()
+        if (r.entries.isNotEmpty()) from.delete(r.entries.keys)
+        return true
+    }
+
     /**
      * The own picture as written to the profile space, with its sealed content. Reuses the content on the relays when it
      * is the same picture ([there]), so that its ID stays; `null` image ID = generated picture.
@@ -4856,8 +5350,9 @@ class AnmpCore(
      * mailbox. The Kern-space of an emergency card stays (only the code reaches it) but leads to nothing any more.
      * Messages others already received stay with them; own objects in circle spaces expire there.
      *
-     * Checks first that a relay answers ([EraseResult.Offline]: nothing was changed). Then waits up to [wait] for the
-     * queued writes; [EraseResult.Partly] if some are still open. Afterwards this core sends nothing any more: stop it
+     * Checks first that a relay answers ([EraseResult.Offline]: nothing was changed). Then waits up to [wait] until every
+     * queued write is at one relay at least; [EraseResult.Partly] if some are not: keep this core running until
+     * [undeliveredWrites] is 0, otherwise circles and contacts may never learn of it. Afterwards this core sends nothing any more: stop it
      * and delete the installation.
      */
     suspend fun eraseEverything(wait: Duration = ERASE_WAIT): EraseResult {
@@ -4867,12 +5362,17 @@ class AnmpCore(
             mailboxObjects(ownAccess())
         } ?: return EraseResult.Offline
         onCore {
+            // From here on nothing that arrives is taken in: what goes to the person is opened here too (ADR 0107).
+            erasing = true
             pushTarget.value?.let { registerWatch(it, remove = true) }
             pushTarget.value = null
             state.circles.forEach { leaveCircle(it.id) }
             // Channels: own ones revoke their device addresses (record deleted, sender grant revoked), like leaving.
             state.channels.forEach { leaveChannel(it.id) }
             state.members.filter { it.circleId == MemberState.CONTACTS }.map { it.person }.distinct().forEach { removeContact(it) }
+            // Every grant still open, above all the one of the contact link (ADR 0084): nobody writes to this mailbox any more,
+            // and contacts notice it by the refusal (ADR 0046, addendum 15.11.2026).
+            revoke("")
             // Last: the removed devices get one copy of the new chain in their slot of the own mailbox (kept below).
             own?.let { cur ->
                 val i = cur.deviceIds.indexOfFirst { it.contentEquals(me.device.deviceId) }
@@ -4880,7 +5380,8 @@ class AnmpCore(
                 if (i >= 0 && others.isNotEmpty() && !revokedHere) changeOwnList(listOf(cur.list.devices[i]), cur.list.revoked + others)
             }
         }
-        val sent = withTimeoutOrNull(wait) { while (transport.pending().isNotEmpty()) delay(ERASE_POLL) } != null
+        // Enough once every write is at one holder at least; the relays copy it among themselves (ANDP §5.3).
+        val sent = withTimeoutOrNull(wait) { while (undeliveredWrites() > 0) delay(ERASE_POLL) } != null
         // Circles we were the last in: their stores go now, the installation is deleted afterwards.
         cleanUpStores()
         onCore {
@@ -4892,6 +5393,7 @@ class AnmpCore(
                     .forEach { id -> transport.delete(sp.accessOf().cred, sp.space, ID(id), entry = false) }
                 sp.delete(r.entries.keys)
             }
+            deviceSpace()?.let { sp -> sp.delete(sp.read().entries.keys) }
             platform.secrets.get(STATE_SECRET)?.let { secret -> stateSpace(secret).let { sp -> sp.delete(sp.read().entries.keys) } }
             val a = ownAccess()
             inbox.forEach { (id, entry) -> transport.delete(a.cred, a.space, id, entry) }
@@ -4931,6 +5433,14 @@ class AnmpCore(
 
     /** Pending writes (for tests and the "Verbindungen" view). */
     suspend fun pendingWrites(): Int = transport.pending().size
+
+    /**
+     * Pending writes that no relay has taken yet (entry, receipt or a content without any holder). After
+     * [eraseEverything] gave [EraseResult.Partly], the app waits for 0 before it deletes the installation; the
+     * writes go on in the background, also after a restart.
+     */
+    suspend fun undeliveredWrites(): Int =
+        transport.pending().count { j -> (listOfNotNull(j.entry, j.hold) + j.contents).any { it.done.isEmpty() } }
 
     /** [mid] from the app if it is a valid ANMP message ID, else a new one. */
     private fun messageIdOf(mid: String?): ByteArray =
@@ -5035,6 +5545,15 @@ class AnmpCore(
         /** How long the store of a circle left as the last member is tried to be emptied (ms, 30 days). */
         private const val STORE_CLEANUP_KEEP = 30L * 24 * 3600 * 1000
 
+        /** Attachments stay 30 days with their entry (ADR 0088): an old entry with younger ones is not deleted yet. */
+        private const val ATTACHMENT_KEEP_S = 30L * 24 * 3600
+
+        /** Entry of a device no longer in the own list stays this long after its last change (ADR 0106 §2). */
+        private const val DEVICE_ENTRY_KEEP = 90L * 24 * 3600 * 1000
+
+        /** Device settings are written this long after a change, so that a burst of changes makes one entry. */
+        private val DEVICE_WRITE_DELAY = 5.seconds
+
         /** How long a left circle or removed contact is remembered against snapshots (ms, 90 days). */
         private const val TOMBSTONE_KEEP = 90L * 24 * 3600 * 1000
 
@@ -5066,7 +5585,7 @@ class AnmpCore(
 }
 
 /** A recipient device and the mailbox of its person; [legacy]: the device's app predates ADR 0042 (old envelope key). */
-internal class Target(val peer: Peer, val inbox: String, val legacy: Boolean)
+internal class Target(val peer: Peer, val inbox: String, val legacy: Boolean, val mailbox: Boolean = false)
 
 /** Hand-over to an added device (ADR 0042 §5), sealed with the one-time pairing secret. */
 @Serializable
@@ -5085,6 +5604,14 @@ internal class VaultEntry(
     @CborLabel(0) val changed: Long,
     @CborLabel(1) val data: ByteArray,
     @CborLabel(2) val key: ByteArray? = null,
+)
+
+/** Entry of the device space (ADR 0106): settings of the device [device] (16 bytes), written at [changed] ms. */
+@Serializable
+internal class DeviceEntry(
+    @CborLabel(0) val device: ByteArray,
+    @CborLabel(1) val changed: Long,
+    @CborLabel(2) val settings: Map<String, ProfileValue> = emptyMap(),
 )
 
 /** Entry of the profile space (ADR 0050): name, picture and settings of the person, each with when it changed. */

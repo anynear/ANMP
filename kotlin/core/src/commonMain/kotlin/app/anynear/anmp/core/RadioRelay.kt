@@ -23,8 +23,22 @@ import kotlin.time.Duration.Companion.seconds
 /**
  * Delivery through patrons (ADR 0051): uplink into the radio inbox, ask without internet, be a patron for others.
  * Knows neither circles nor messages; everything about content is done by [Env] ([RadioWay]).
+ *
+ * The patron part follows the radio flow vectors (vectors/anmp-v1-radio-flows.json, ADR 0054 §3a), which the Go module
+ * plays for the bridge too. [perGatewayHour] caps the packets per hour over all patronages and gateway ([onAsk] `via`;
+ * the app has one, its radio); a patron whose gateway budget is used up does not offer itself. A packet goes to the
+ * same asker (its hourly sender tag) at most once an hour, also across patronages: each ask brings a new one-time key,
+ * and `since` alone does not stop resending (it overlaps by 10 minutes and only moves with internet or the radio
+ * inbox). [jitterMillis] and [newKey] are the random parts of an offer, fixed only in the vectors.
  */
-internal class RadioRelay(private val scope: CoroutineScope, private val env: Env, private val timings: RadioTimings = RadioTimings()) {
+internal class RadioRelay(
+    private val scope: CoroutineScope,
+    private val env: Env,
+    private val timings: RadioTimings = RadioTimings(),
+    private val perGatewayHour: Int = MAX_PER_HOUR,
+    private val jitterMillis: () -> Long = { Random.nextLong(0, JITTER_MS) },
+    private val newKey: suspend () -> AnmpEphemeral = { AnmpEphemeral.generate() },
+) {
     /** What the relay needs from the radio way. */
     interface Env {
         fun nowMillis(): Long
@@ -62,13 +76,29 @@ internal class RadioRelay(private val scope: CoroutineScope, private val env: En
         /** Sends to everyone on the radio channel; [hopLimit] `null` = the radio's default. `false` if nothing went out. */
         suspend fun broadcast(packet: ByteArray, hopLimit: Int?): Boolean
 
+        /** Sends a patron's packet through gateway [via] (bridge); the app has only its radio, `via` `null`. */
+        suspend fun broadcastVia(packet: ByteArray, hopLimit: Int?, via: String?): Boolean = broadcast(packet, hopLimit)
+
+        /** A patron held a packet back: [which] limit was reached, [LIMIT_PATRONAGE] or [LIMIT_GATEWAY]. */
+        fun onLimit(which: String) = Unit
+
         fun log(text: String)
     }
 
-    private class Patronage(val tags: Set<String>, var hops: Int, var until: Long, val since: Long, val sent: MutableSet<String> = mutableSetOf())
+    private class Patronage(
+        /** Hourly sender tag of the asker (pickup field 1). */
+        val asker: String,
+        val tags: Set<String>,
+        var hops: Int,
+        var until: Long,
+        val since: Long,
+        val via: String?,
+        val sent: MutableSet<String> = mutableSetOf(),
+        val sentAt: ArrayDeque<Long> = ArrayDeque(),
+    )
 
     /** Offer as patron, until the asking device answers with `pickup`. */
-    private class Offer(val key: AnmpEphemeral, val hops: Int, val since: Long, val at: Long)
+    private class Offer(val key: AnmpEphemeral, val hops: Int, val since: Long, val at: Long, val via: String?)
 
     private val lock = Mutex()
     private val uplinked = LinkedHashMap<String, Long>()
@@ -76,7 +106,12 @@ internal class RadioRelay(private val scope: CoroutineScope, private val env: En
     private val patronages = mutableMapOf<String, Patronage>()
     private val offers = mutableListOf<Offer>()
     private var pickupSent = true
-    private val sentAt = ArrayDeque<Long>()
+
+    /** Packets sent as patron in the last hour, per gateway (`null`: the own radio). */
+    private val sentAt = mutableMapOf<String?, ArrayDeque<Long>>()
+
+    /** Packets sent as patron in the last hour, by asker sender tag and packet, oldest first; at most [MAX_DELIVERED]. */
+    private val delivered = LinkedHashMap<String, Long>()
     private var lastPatronHeard = 0L
     private var lastOnline = 0L
     private var lastDelivery = 0L
@@ -144,11 +179,13 @@ internal class RadioRelay(private val scope: CoroutineScope, private val env: En
         for (offer in open) {
             val pickup = AnmpRadio.openPickup(packet, offer.key) ?: continue
             val tags = pickup.windows.flatMap { AnmpRadio.windowTags(it, pickup.hour) }.map { keyOf(it.second) }.toSet()
-            val asker = Anmp.peek(packet)?.senderKey?.let(::keyOf) ?: return
+            val head = Anmp.peek(packet) ?: return
+            val asker = head.senderKey?.let(::keyOf) ?: return
             val p = lock.withLock {
                 val until = now + timings.patronage.inWholeMilliseconds
                 val old = patronages[asker]
-                Patronage(old?.tags.orEmpty() + tags, offer.hops, until, offer.since, old?.sent ?: mutableSetOf()).also { patronages[asker] = it }
+                Patronage(keyOf(head.from), old?.tags.orEmpty() + tags, offer.hops, until, offer.since, offer.via, old?.sent ?: mutableSetOf(), old?.sentAt ?: ArrayDeque())
+                    .also { patronages[asker] = it }
             }
             refresh()
             val waiting = lock.withLock { matching(p.tags).filter { it.ts > p.since } }
@@ -158,20 +195,32 @@ internal class RadioRelay(private val scope: CoroutineScope, private val env: En
         }
     }
 
-    /** Heard another device's request ([hops]: measured, [snr]: signal to noise). */
-    suspend fun onAsk(header: AnmpHeader, hops: Int?, snr: Float?) {
+    /**
+     * Heard another device's request ([hops]: measured, [snr]: signal to noise, [via]: gateway it came through, bridge
+     * only). Hop limit of the answer and the packets: measured hops, at least 1.
+     */
+    suspend fun onAsk(header: AnmpHeader, hops: Int?, snr: Float?, via: String? = null) {
         if (!env.online() || !env.inboxReady() || !env.mayServeOthers()) return
         val askedAt = env.nowMillis()
         scope.launch {
-            delay(patronWait(snr))
-            // Listen first, then send: if another patron answered while we waited, we stay quiet.
-            if (lock.withLock { lastPatronHeard >= askedAt }) return@launch
+            val wait = patronWait(snr)
+            val key = newKey()
+            delay(wait)
+            // Listen first, then send: if another patron answered while we waited, we stay quiet. So does a patron whose
+            // gateway budget is used up: it could not send anything.
+            val quiet = lock.withLock {
+                when {
+                    lastPatronHeard >= askedAt -> true
+                    gatewayFull(via, env.nowMillis()) -> true.also { env.onLimit(LIMIT_GATEWAY) }
+                    else -> false
+                }
+            }
+            if (quiet) return@launch
             if (!env.radioReady()) return@launch
-            val key = AnmpEphemeral.generate()
             val packet = env.patronPacket(key.publicKey) ?: return@launch
-            if (!env.broadcast(packet, hops)) return@launch
+            if (!env.broadcastVia(packet, hops?.coerceAtLeast(1), via)) return@launch
             val since = (header.since ?: 0) - timings.sinceOverlap.inWholeSeconds
-            lock.withLock { offers += Offer(key, hops ?: DEFAULT_HOPS, since, env.nowMillis()) }
+            lock.withLock { offers += Offer(key, (hops ?: DEFAULT_HOPS).coerceAtLeast(1), since, env.nowMillis(), via) }
             env.log("radio: offered as patron, hops ${hops ?: "?"}")
         }
     }
@@ -181,19 +230,51 @@ internal class RadioRelay(private val scope: CoroutineScope, private val env: En
         val max = timings.patronWaitMax.inWholeMilliseconds
         // Who hears better goes first: SNR 5 dB and more → shortest wait, −15 dB and less → longest.
         val share = ((5f - (snr ?: -15f)) / 20f).coerceIn(0f, 1f)
-        return (min + ((max - min) * share).toLong() + Random.nextLong(0, 2_000)).milliseconds
+        return (min + ((max - min) * share).toLong() + jitterMillis()).milliseconds
     }
 
+    /** Packets of the last hour through [via]; call under [lock]. */
+    private fun gatewayFull(via: String?, now: Long): Boolean {
+        val gateway = sentAt.getOrPut(via) { ArrayDeque() }
+        while (gateway.isNotEmpty() && now - gateway.first() > HOUR_MS) gateway.removeFirst()
+        return gateway.size >= perGatewayHour
+    }
+
+    /**
+     * Sends [packets] for [p]: each once per patronage and once an hour per asker, at most [MAX_PER_HOUR] per patronage
+     * and [perGatewayHour] per gateway.
+     */
     private suspend fun send(p: Patronage, packets: List<RadioInboxPacket>) {
         for (packet in packets) {
             val key = keyOf(packet.packet)
-            val allowed = lock.withLock {
+            val toAsker = "${p.asker}/$key"
+            val (allowed, limit) = lock.withLock {
                 val now = env.nowMillis()
-                while (sentAt.isNotEmpty() && now - sentAt.first() > HOUR_MS) sentAt.removeFirst()
-                if (key in p.sent || sentAt.size >= MAX_PER_HOUR) false else true.also { p.sent += key; sentAt.addLast(now) }
+                val gateway = sentAt.getOrPut(p.via) { ArrayDeque() }
+                for (q in listOf(p.sentAt, gateway)) while (q.isNotEmpty() && now - q.first() > HOUR_MS) q.removeFirst()
+                val old = delivered.entries.iterator()
+                while (old.hasNext() && now - old.next().value > HOUR_MS) old.remove()
+                when {
+                    key in p.sent || toAsker in delivered -> false to null
+                    p.sentAt.size >= MAX_PER_HOUR -> false to LIMIT_PATRONAGE
+                    gateway.size >= perGatewayHour -> false to LIMIT_GATEWAY
+                    else -> true.also {
+                        p.sent += key
+                        p.sentAt.addLast(now)
+                        gateway.addLast(now)
+                        delivered[toAsker] = now
+                        while (delivered.size > MAX_DELIVERED) delivered.remove(delivered.keys.first())
+                    } to null
+                }
             }
+            if (limit != null) env.onLimit(limit)
             if (!allowed) continue
-            if (!env.broadcast(packet.packet, p.hops)) lock.withLock { p.sent -= key; sentAt.removeLastOrNull() }
+            if (!env.broadcastVia(packet.packet, p.hops, p.via)) lock.withLock {
+                p.sent -= key
+                delivered.remove(toAsker)
+                p.sentAt.removeLastOrNull()
+                sentAt[p.via]?.removeLastOrNull()
+            }
         }
     }
 
@@ -205,8 +286,7 @@ internal class RadioRelay(private val scope: CoroutineScope, private val env: En
                 if (env.online()) lock.withLock { lastOnline = now }
                 if (env.online() && env.inboxReady() && now - lastPoll >= timings.pollEvery.inWholeMilliseconds) {
                     lastPoll = now
-                    refresh()
-                    servePatronages()
+                    serve()
                 }
                 maybeAsk(now)
             } catch (e: CancellationException) {
@@ -216,6 +296,12 @@ internal class RadioRelay(private val scope: CoroutineScope, private val env: En
             }
             delay(timings.tick)
         }
+    }
+
+    /** Reads the radio inbox and sends what the patronages wait for (every [RadioTimings.pollEvery]). */
+    internal suspend fun serve() {
+        refresh()
+        servePatronages()
     }
 
     /** Fetches news from the radio inbox: sorts own packets, keeps all for patronages. */
@@ -283,14 +369,25 @@ internal class RadioRelay(private val scope: CoroutineScope, private val env: En
     }
 
     companion object {
-        /** At most this many packets per request and per hour over all (ADR 0051). */
+        /** At most this many packets per request and per hour and patronage (ADR 0051, 0054 §4). */
         const val MAX_PER_ASK = 5
         const val MAX_PER_HOUR = 20
+        /** Per gateway and hour at the bridge, over all patronages (ADR 0054 §4, a parameter of the bridge). */
+        const val BRIDGE_PER_GATEWAY_HOUR = 60
+        /** Random part of the wait before an offer, on top of the wait by signal. */
+        const val JITTER_MS = 2_000L
+        const val LIMIT_PATRONAGE = "patronage"
+        const val LIMIT_GATEWAY = "gateway"
+        /** Packets remembered per asker for an hour, over all askers (bounded besides by the gateway budgets). */
+        const val MAX_DELIVERED = 2_000
         const val MAX_ASK_HOPS = 3
-        private const val DEFAULT_HOPS = 3
+        /** Hop limit when the radio did not measure the ask's hops. */
+        const val DEFAULT_HOPS = 3
         private const val HOUR_MS = 3_600_000L
         /** How long an offer as patron waits for `pickup`. */
-        private const val OFFER_MS = 120_000L
+        const val OFFER_MS = 120_000L
+        /** Wait of the bridge before an offer, longer than any app's (ADR 0054 §4), plus [JITTER_MS]; no SNR. */
+        val BRIDGE_PATRON_WAIT = 30.seconds
         /** How long entries of the radio inbox live. */
         private const val LIFETIME_S = RadioInbox.LIFETIME_SECONDS
         private const val MAX_CACHE = 20_000

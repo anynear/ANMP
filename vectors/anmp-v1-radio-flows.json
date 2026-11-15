@@ -1,0 +1,3320 @@
+{
+    "protocol": "ANMP version v1, radio flows of the patron (ADR 0051, ADR 0054 §3a, §4)",
+    "comment": "Flows of a patron (ADR 0051 §5, §5a, §6; ADR 0054 §4), written by kotlin/core RadioFlowVectorsTest (UPDATE_VECTORS=1) through RadioRelay and played by go/anmp patron_test.go. Times: start + t in milliseconds, inbox ts in Unix seconds. Each step first lets the time run to t (offers whose wait ends at or before t go out), then takes its input: inbox (entries put into the radio inbox, read only with the next pickup or serve), ask (heard through gateway, measured hops or null, SNR or null, the random part jitterMs of the wait and the one-time key patronKey (X25519 private) the patron draws for it), patron (heard another patron), pickup (heard), serve (the patron reads the radio inbox and serves its patronages). send: packets that went out in the step, in order, with hop limit (null: the radio's own) and gateway (null: the app's radio). limits: packets held back, patronage (perHour per patronage) or gateway (perGatewayHour over all patronages; also an offer not sent because the budget of its gateway is used up). A packet goes to the same asker (sender tag of the pickup) at most once an hour, across patronages. Wait before an offer: waitMin + (waitMax − waitMin) × clamp((5 − SNR) / 20, 0, 1) in float32, truncated, + jitterMs; SNR null counts as −15. Patron packets are open packets with from = patronFrom.",
+    "start": 1762000000000,
+    "settings": {
+        "app": {
+            "waitMinMs": 2000,
+            "waitMaxMs": 20000,
+            "jitterMaxMs": 2000,
+            "perAsk": 5,
+            "perHour": 20,
+            "perGatewayHour": 20,
+            "patronageMs": 3600000,
+            "offerMs": 120000,
+            "sinceOverlapS": 600,
+            "defaultHops": 3,
+            "inboxLifetimeS": 2592000
+        },
+        "bridge": {
+            "waitMinMs": 30000,
+            "waitMaxMs": 30000,
+            "jitterMaxMs": 2000,
+            "perAsk": 5,
+            "perHour": 20,
+            "perGatewayHour": 60,
+            "patronageMs": 3600000,
+            "offerMs": 120000,
+            "sinceOverlapS": 600,
+            "defaultHops": 3,
+            "inboxLifetimeS": 2592000
+        }
+    },
+    "flows": [
+        {
+            "name": "app: patron delivers the last 30 days",
+            "setting": "app",
+            "patronFrom": "5050505050505050",
+            "steps": [
+                {
+                    "t": 0,
+                    "note": "radio inbox: Clara 5 h and 20 days ago, Clara 31 days ago, Bob",
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006488c5bb9a6c357faa2582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263ed00851f297aa806adb9d8f06147d6a188",
+                            "ts": 1761982000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648743a5d51f7c08b20582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb6041a7704a314bec73e43e3dcbb5c56ae8e",
+                            "ts": 1760272000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf637e45b0728413582f030405060708090a0b0c0d0e29d9fa072247801ee9485998fef0f87a0d949c7ecfcf485d17d0af903697dc76702361",
+                            "ts": 1759321600
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648ad37d9d2ba4ca9e9582f0405060708090a0b0c0d0e0ff244e59116835cf3de513378408d5a3f8a320ad42f98f76a03e36d32d0077ee9bd0a0e",
+                            "ts": 1761996400
+                        }
+                    ],
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 0,
+                    "note": "Clara asks, 2 hops, SNR 6 dB",
+                    "ask": {
+                        "packet": "414e01824fa300140148a1a1a1a1a1a1a1a1070040",
+                        "hops": 2,
+                        "snr": 6.0,
+                        "gateway": null,
+                        "jitterMs": 700,
+                        "patronKey": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 2699,
+                    "note": "still waiting",
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 2700,
+                    "note": "offer with a one-time key",
+                    "send": [
+                        {
+                            "packet": "414e01825830a300150148505050505050505004582079a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a40",
+                            "hops": 2,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 5700,
+                    "note": "Clara's pickup: her packets of the last 30 days, newest first",
+                    "pickup": "414e01825840a500160148a1a1a1a1a1a1a1a1024879a631eede1bf9c90458203d41a359ccbb4064475bf7ea5f93928fb04d4753780af7d12e3e301736f786020a1a000777e458428dc27092844a89dcb80f19106b7d61599a832be0fc636716183d911774facedea9d43536884eea2d80991d28ac9b476a938f3aec680ff3478ffcb950ad8e53676950",
+                    "send": [
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006488c5bb9a6c357faa2582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263ed00851f297aa806adb9d8f06147d6a188",
+                            "hops": 2,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648743a5d51f7c08b20582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb6041a7704a314bec73e43e3dcbb5c56ae8e",
+                            "hops": 2,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 35700,
+                    "note": "reading the radio inbox again sends nothing twice",
+                    "serve": true,
+                    "send": [],
+                    "limits": []
+                }
+            ]
+        },
+        {
+            "name": "app: another app was faster",
+            "setting": "app",
+            "patronFrom": "5050505050505050",
+            "steps": [
+                {
+                    "t": 0,
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648e05a4fcb50b22fc4582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263ed7daadac95470208cdc5fa75e5e8493b6",
+                            "ts": 1761996400
+                        }
+                    ],
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 0,
+                    "note": "Clara asks, weak signal",
+                    "ask": {
+                        "packet": "414e01824fa300140148a1a1a1a1a1a1a1a1070040",
+                        "hops": 1,
+                        "snr": -15.0,
+                        "gateway": null,
+                        "jitterMs": 1500,
+                        "patronKey": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 5000,
+                    "note": "a patron answers",
+                    "patron": "414e01825830a3001501485555555555555555045820666666666666666666666666666666666666666666666666666666666666666640",
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 21500,
+                    "note": "our wait is over: nothing",
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 81500,
+                    "note": "nothing later either",
+                    "serve": true,
+                    "send": [],
+                    "limits": []
+                }
+            ]
+        },
+        {
+            "name": "app: patron heard before the ask",
+            "setting": "app",
+            "patronFrom": "5050505050505050",
+            "steps": [
+                {
+                    "t": 0,
+                    "note": "a patron for someone else",
+                    "patron": "414e01825830a3001501485555555555555555045820666666666666666666666666666666666666666666666666666666666666666640",
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 1000,
+                    "note": "Clara asks",
+                    "ask": {
+                        "packet": "414e01824fa300140148a1a1a1a1a1a1a1a1070040",
+                        "hops": 1,
+                        "snr": 0.0,
+                        "gateway": null,
+                        "jitterMs": 0,
+                        "patronKey": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 7500,
+                    "note": "offer",
+                    "send": [
+                        {
+                            "packet": "414e01825830a300150148505050505050505004582079a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a40",
+                            "hops": 1,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                }
+            ]
+        },
+        {
+            "name": "app: five per ask at the pickup, the rest with the next reading",
+            "setting": "app",
+            "patronFrom": "5050505050505050",
+            "steps": [
+                {
+                    "t": 0,
+                    "note": "eight packets for Clara",
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263edfd1856332901bfafa0958575dde28f58",
+                            "ts": 1761999400
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb6046b6daa758b8892ced1582ba582becd61",
+                            "ts": 1761998800
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f030405060708090a0b0c0d0e29d9fa072247801ee9485998fef0f87a0d949c9531f93643beaaeb7f9b547190730460",
+                            "ts": 1761998200
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0405060708090a0b0c0d0e0ff244e59116439c331e91f3b8808d5a3f8a320a9b5fa3e3008725bd3ac0be82174fb7f3",
+                            "ts": 1761997600
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f05060708090a0b0c0d0e0f10a4fef06db2d3a72d3ebff53fcf468e85e2d5ddb53aeb9cea667a1bf5d10ed803252d0f",
+                            "ts": 1761997000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f060708090a0b0c0d0e0f1011c19a06c664385c911738916612ad02ac5b4f5d93039f69a9e81c10b04ea87272b39655",
+                            "ts": 1761996400
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0708090a0b0c0d0e0f10111201f9c2ecc577e68e7e08e343cc594bb929c93fef89ae860715e95dc364aa2a7d19cb73",
+                            "ts": 1761995800
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f08090a0b0c0d0e0f10111213ddfdf5e48fd5e189618416401bac3b6275c0590c7390ddd95fd119be99947a42c316f0",
+                            "ts": 1761995200
+                        }
+                    ],
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 0,
+                    "ask": {
+                        "packet": "414e01824fa300140148a1a1a1a1a1a1a1a1070040",
+                        "hops": 1,
+                        "snr": 5.0,
+                        "gateway": null,
+                        "jitterMs": 0,
+                        "patronKey": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 2000,
+                    "note": "offer",
+                    "send": [
+                        {
+                            "packet": "414e01825830a300150148505050505050505004582079a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a40",
+                            "hops": 1,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 3000,
+                    "note": "pickup: the five newest",
+                    "pickup": "414e01825840a500160148a1a1a1a1a1a1a1a1024879a631eede1bf9c90458203d41a359ccbb4064475bf7ea5f93928fb04d4753780af7d12e3e301736f786020a1a000777e458429bb66e56bf908b24b8704c0c50ec0f561943a79a68cb6bbe99aa0bf10502dcfd50b8f23085f4ccaf5fb357c7f27ad3a8121a1725df6b46e213799e674ba770dbbcc9",
+                    "send": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263edfd1856332901bfafa0958575dde28f58",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb6046b6daa758b8892ced1582ba582becd61",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f030405060708090a0b0c0d0e29d9fa072247801ee9485998fef0f87a0d949c9531f93643beaaeb7f9b547190730460",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0405060708090a0b0c0d0e0ff244e59116439c331e91f3b8808d5a3f8a320a9b5fa3e3008725bd3ac0be82174fb7f3",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f05060708090a0b0c0d0e0f10a4fef06db2d3a72d3ebff53fcf468e85e2d5ddb53aeb9cea667a1bf5d10ed803252d0f",
+                            "hops": 1,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 33000,
+                    "note": "next reading: the other three",
+                    "serve": true,
+                    "send": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f060708090a0b0c0d0e0f1011c19a06c664385c911738916612ad02ac5b4f5d93039f69a9e81c10b04ea87272b39655",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0708090a0b0c0d0e0f10111201f9c2ecc577e68e7e08e343cc594bb929c93fef89ae860715e95dc364aa2a7d19cb73",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f08090a0b0c0d0e0f10111213ddfdf5e48fd5e189618416401bac3b6275c0590c7390ddd95fd119be99947a42c316f0",
+                            "hops": 1,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                }
+            ]
+        },
+        {
+            "name": "app: since minus ten minutes",
+            "setting": "app",
+            "patronFrom": "5050505050505050",
+            "steps": [
+                {
+                    "t": 0,
+                    "note": "put one second before, at and one second after since minus 10 minutes",
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648e05a4fcb50b22fc4582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263ed7daadac95470208cdc5fa75e5e8493b6",
+                            "ts": 1761995799
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648e05a4fcb50b22fc4582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb604ebdf268ff6f90dedad92098e01d8d18f",
+                            "ts": 1761995800
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648e05a4fcb50b22fc4582f030405060708090a0b0c0d0e29d9fa072247801ee9485998fef0f87a0d949c158375cc3ecf35c80351765a1315188e",
+                            "ts": 1761995801
+                        }
+                    ],
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 0,
+                    "note": "Clara asks, since 60 minutes before the start",
+                    "ask": {
+                        "packet": "414e018253a300140148a1a1a1a1a1a1a1a1071a6905ee7040",
+                        "hops": 1,
+                        "snr": null,
+                        "gateway": null,
+                        "jitterMs": 300,
+                        "patronKey": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 20300,
+                    "note": "offer",
+                    "send": [
+                        {
+                            "packet": "414e01825830a300150148505050505050505004582079a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a40",
+                            "hops": 1,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 21300,
+                    "note": "only the packet later than since minus 10 minutes",
+                    "pickup": "414e01825840a500160148a1a1a1a1a1a1a1a1024879a631eede1bf9c90458203d41a359ccbb4064475bf7ea5f93928fb04d4753780af7d12e3e301736f786020a1a000777e45842eb8e1e1c9f690d1bf664478d219f1bc28961ecd157219c2ee708b3de86df190c06ac8990238d889ac96fefafd945f0f667a2f5a0925edec5ea39d29a89829b47202b",
+                    "send": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648e05a4fcb50b22fc4582f030405060708090a0b0c0d0e29d9fa072247801ee9485998fef0f87a0d949c158375cc3ecf35c80351765a1315188e",
+                            "hops": 1,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                }
+            ]
+        },
+        {
+            "name": "app: hop limit at least one",
+            "setting": "app",
+            "patronFrom": "5050505050505050",
+            "steps": [
+                {
+                    "t": 0,
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263edfd1856332901bfafa0958575dde28f58",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f02030405060708090a0b0c0d46b17c8c9c34b3e072383fb130dae462eeb6043c5ecbe547259c503da0d0e676ad4860",
+                            "ts": 1762000000
+                        }
+                    ],
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 0,
+                    "note": "Clara asks, heard directly (0 hops)",
+                    "ask": {
+                        "packet": "414e01824fa300140148a1a1a1a1a1a1a1a1070040",
+                        "hops": 0,
+                        "snr": 10.0,
+                        "gateway": null,
+                        "jitterMs": 0,
+                        "patronKey": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 0,
+                    "note": "Bob asks, hops unknown",
+                    "ask": {
+                        "packet": "414e01824fa300140148a2a2a2a2a2a2a2a2070040",
+                        "hops": null,
+                        "snr": 10.0,
+                        "gateway": null,
+                        "jitterMs": 0,
+                        "patronKey": "434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 2000,
+                    "note": "two offers",
+                    "send": [
+                        {
+                            "packet": "414e01825830a300150148505050505050505004582079a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a40",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825830a3001501485050505050505050045820d87a9cb8b89ec911ce8e7cc97cf61b6fc37936d237ee67f29956d8931130180640",
+                            "hops": null,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 3000,
+                    "note": "Clara's pickup: hop limit 1",
+                    "pickup": "414e01825840a500160148a1a1a1a1a1a1a1a1024879a631eede1bf9c90458203d41a359ccbb4064475bf7ea5f93928fb04d4753780af7d12e3e301736f786020a1a000777e458426633c4108312528b0f2260beed1af4fce376de881f424e9c156eeb56fed6d64e2e3392a5eb5ecbef862b6a789b329deaee287f34ceae32311f480d2bdb8b4ff5ecb8",
+                    "send": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263edfd1856332901bfafa0958575dde28f58",
+                            "hops": 1,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 4000,
+                    "note": "Bob's pickup: hop limit 3",
+                    "pickup": "414e01825840a500160148a2a2a2a2a2a2a2a20248d87a9cb8b89ec911045820016fe972ee15bffc83ff35d19d3e149a4a515dc1515bf05c6b182928ae3cb9140a1a000777e4584223f1491bd2e650f2f729f63eb41015d3cb55be4b36b2f1123e415696ff418164521701d5530320edcc7880b5cd7a7152920d409376a8499956cb54355de95b033ddc",
+                    "send": [
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f02030405060708090a0b0c0d46b17c8c9c34b3e072383fb130dae462eeb6043c5ecbe547259c503da0d0e676ad4860",
+                            "hops": 3,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                }
+            ]
+        },
+        {
+            "name": "app: pickup for another patron or too late",
+            "setting": "app",
+            "patronFrom": "5050505050505050",
+            "steps": [
+                {
+                    "t": 0,
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263edfd1856332901bfafa0958575dde28f58",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f02030405060708090a0b0c0d46b17c8c9c34b3e072383fb130dae462eeb6043c5ecbe547259c503da0d0e676ad4860",
+                            "ts": 1762000000
+                        }
+                    ],
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 0,
+                    "ask": {
+                        "packet": "414e01824fa300140148a1a1a1a1a1a1a1a1070040",
+                        "hops": 1,
+                        "snr": 5.0,
+                        "gateway": null,
+                        "jitterMs": 0,
+                        "patronKey": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 2000,
+                    "note": "offer",
+                    "send": [
+                        {
+                            "packet": "414e01825830a300150148505050505050505004582079a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a40",
+                            "hops": 1,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 3000,
+                    "note": "pickup for another patron",
+                    "pickup": "414e01825840a500160148a1a1a1a1a1a1a1a102481cf579aba45a10ba0458203d41a359ccbb4064475bf7ea5f93928fb04d4753780af7d12e3e301736f786020a1a000777e4584220a5051d5f4312c0827937223a67f1b0dad2e8bde29282514b2a95542b3eae268292d4dfa1823964d56df83eb355db8d325df517e653079197d1097aa6c5ae82fd83",
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 62000,
+                    "note": "Bob asks",
+                    "ask": {
+                        "packet": "414e01824fa300140148a2a2a2a2a2a2a2a2070040",
+                        "hops": 1,
+                        "snr": 5.0,
+                        "gateway": null,
+                        "jitterMs": 0,
+                        "patronKey": "434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 64000,
+                    "note": "offer for Bob",
+                    "send": [
+                        {
+                            "packet": "414e01825830a3001501485050505050505050045820d87a9cb8b89ec911ce8e7cc97cf61b6fc37936d237ee67f29956d8931130180640",
+                            "hops": 1,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 184001,
+                    "note": "Bob's pickup comes too late",
+                    "pickup": "414e01825840a500160148a2a2a2a2a2a2a2a20248d87a9cb8b89ec911045820016fe972ee15bffc83ff35d19d3e149a4a515dc1515bf05c6b182928ae3cb9140a1a000777e458422f1d7cc3b6f7f9cd9ffa3aa1d4f79ccbb85bee8405ae767e23111724cf317d10c7ad1736defa99fa7dd80690a32e36657bc24099d343a1685dc2e1341351c20499ca",
+                    "send": [],
+                    "limits": []
+                }
+            ]
+        },
+        {
+            "name": "app: patronage for sixty minutes",
+            "setting": "app",
+            "patronFrom": "5050505050505050",
+            "steps": [
+                {
+                    "t": 0,
+                    "ask": {
+                        "packet": "414e01824fa300140148a1a1a1a1a1a1a1a1070040",
+                        "hops": 1,
+                        "snr": 5.0,
+                        "gateway": null,
+                        "jitterMs": 0,
+                        "patronKey": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 2000,
+                    "note": "offer",
+                    "send": [
+                        {
+                            "packet": "414e01825830a300150148505050505050505004582079a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a40",
+                            "hops": 1,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 3000,
+                    "note": "pickup, nothing waiting yet",
+                    "pickup": "414e01825840a500160148a1a1a1a1a1a1a1a1024879a631eede1bf9c90458203d41a359ccbb4064475bf7ea5f93928fb04d4753780af7d12e3e301736f786020a1a000777e45842714bb301060fbb8ab3a7c8e43d75df98ad1fa831681ebde3b1e57725753cf2a41dc1d294bed3d61f9a9676023cea73678430c75136bd1f83e5e590f9e11e39b7ac90",
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 602000,
+                    "note": "new message for Clara",
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263edfd1856332901bfafa0958575dde28f58",
+                            "ts": 1762000600
+                        }
+                    ],
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 632000,
+                    "note": "sent at the next reading",
+                    "serve": true,
+                    "send": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263edfd1856332901bfafa0958575dde28f58",
+                            "hops": 1,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 3603000,
+                    "note": "another one, at the last moment",
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb6046b6daa758b8892ced1582ba582becd61",
+                            "ts": 1762003603
+                        }
+                    ],
+                    "serve": true,
+                    "send": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb6046b6daa758b8892ced1582ba582becd61",
+                            "hops": 1,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 3603001,
+                    "note": "a third one: the patronage is over",
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f030405060708090a0b0c0d0e29d9fa072247801ee9485998fef0f87a0d949c9531f93643beaaeb7f9b547190730460",
+                            "ts": 1762003604
+                        }
+                    ],
+                    "serve": true,
+                    "send": [],
+                    "limits": []
+                }
+            ]
+        },
+        {
+            "name": "app: twenty per hour and patronage",
+            "setting": "app",
+            "patronFrom": "5050505050505050",
+            "steps": [
+                {
+                    "t": 0,
+                    "ask": {
+                        "packet": "414e01824fa300140148a1a1a1a1a1a1a1a1070040",
+                        "hops": 1,
+                        "snr": 5.0,
+                        "gateway": null,
+                        "jitterMs": 0,
+                        "patronKey": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 2000,
+                    "note": "offer",
+                    "send": [
+                        {
+                            "packet": "414e01825830a300150148505050505050505004582079a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a40",
+                            "hops": 1,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 3000,
+                    "note": "pickup, nothing waiting yet",
+                    "pickup": "414e01825840a500160148a1a1a1a1a1a1a1a1024879a631eede1bf9c90458203d41a359ccbb4064475bf7ea5f93928fb04d4753780af7d12e3e301736f786020a1a000777e45842a1b68b89c0266d576779c4d1980668e46b2329f33a6b313c3905ed88dd4aa0365ef2b3c00f73210eb89d35dcda91a1a2264a4da13cb20620b8cd370f2d48427382f5",
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 62000,
+                    "note": "25 new messages for Clara: 20 go out",
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263edfd1856332901bfafa0958575dde28f58",
+                            "ts": 1762000061
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb6046b6daa758b8892ced1582ba582becd61",
+                            "ts": 1762000062
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f030405060708090a0b0c0d0e29d9fa072247801ee9485998fef0f87a0d949c9531f93643beaaeb7f9b547190730460",
+                            "ts": 1762000063
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0405060708090a0b0c0d0e0ff244e59116439c331e91f3b8808d5a3f8a320a9b5fa3e3008725bd3ac0be82174fb7f3",
+                            "ts": 1762000064
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f05060708090a0b0c0d0e0f10a4fef06db2d3a72d3ebff53fcf468e85e2d5ddb53aeb9cea667a1bf5d10ed803252d0f",
+                            "ts": 1762000065
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f060708090a0b0c0d0e0f1011c19a06c664385c911738916612ad02ac5b4f5d93039f69a9e81c10b04ea87272b39655",
+                            "ts": 1762000066
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0708090a0b0c0d0e0f10111201f9c2ecc577e68e7e08e343cc594bb929c93fef89ae860715e95dc364aa2a7d19cb73",
+                            "ts": 1762000067
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f08090a0b0c0d0e0f10111213ddfdf5e48fd5e189618416401bac3b6275c0590c7390ddd95fd119be99947a42c316f0",
+                            "ts": 1762000068
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f090a0b0c0d0e0f10111213143a270c8199e86454dee818ead91f5552e59bf4f1d176c2ac5d07d37f2ea632f3671830",
+                            "ts": 1762000069
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300a0b0c0d0e0f101112131415ebd239b53a4aeb2988c88ea746a837d306a31604c5fb2cd9154929cfee2c1d313a660aa8",
+                            "ts": 1762000070
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300b0c0d0e0f101112131415164df6d0267ab919c544b7712685c6cd093b380e0baa4acaddea73dcacd89f7b55545a20c2",
+                            "ts": 1762000071
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300c0d0e0f1011121314151617092519d484dfc09fe1c9d8bad6ccc9d3ef3f95981dd38a6a802330d6fc9bfe3cf2212f72",
+                            "ts": 1762000072
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300d0e0f101112131415161718a91e6328da164ab46d56fa9be32fb55125124727f17aebca6ec5d721dbc37dbc23919b35",
+                            "ts": 1762000073
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300e0f10111213141516171819b43ec12d9eff7e7e14a87f08554fd22b0bdcaad40e21fcae913706b95b9047676dad23a3",
+                            "ts": 1762000074
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300f101112131415161718191a862feaffc05853f50823d68cbac03dc79970408dd17f33521c4787f0e61d0084ffe9fb4e",
+                            "ts": 1762000075
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c5830101112131415161718191a1bcb6702a567fd6886b5496ca77f6f48bf4f2db6cd1d76259d135aa3a21c9b4d8154b04d74",
+                            "ts": 1762000076
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58301112131415161718191a1b1cda654e55c6ecf4f8c8c8dbc97a08df697e75a6ece49b65e8814dc17865306e0ad288b660",
+                            "ts": 1762000077
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c583012131415161718191a1b1c1d01cc9f984438606a0f3e1dedfb849fb9e99d11a69d1a1d0a72b45c5f1b57b4240224bed6",
+                            "ts": 1762000078
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c5830131415161718191a1b1c1d1e78f54d9b3ad97eadcdfec54f99f906d08c92f409c3eef9bab929fc8ccee054c9027f5b2b",
+                            "ts": 1762000079
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58301415161718191a1b1c1d1e1f768c8e64cc258fa4e2c7d1b9243500d77effeb777103752bb2538d3b8e8f906de27acb09",
+                            "ts": 1762000080
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c583015161718191a1b1c1d1e1f200fecb105f12378d01e6dcb38b6471ff7ed414e0babe89d6ff03aa8a7c46c723fa8ad0b8c",
+                            "ts": 1762000081
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c5830161718191a1b1c1d1e1f2021d38b4d344454fc3e4a84b1953530e820a1777b6a59d25455548f3e3cea292b2e0d0c3105",
+                            "ts": 1762000082
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58301718191a1b1c1d1e1f202122df51b8bbc5b2efc76fe3b7116d42e6b093a8be1a570d0bcfa023b43e0b4b8dbee719c713",
+                            "ts": 1762000083
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c583018191a1b1c1d1e1f202122231bb556aa39943e2ed9b960fe3392c9abf7a86aa057be56c8b3c9a28a1ac1deed5d64461f",
+                            "ts": 1762000084
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c5830191a1b1c1d1e1f2021222324dbc9d7fdb571ee668d5ab9462d473371baa92a577fce4d0a4d2f37d0fc18a1477992ba83",
+                            "ts": 1762000085
+                        }
+                    ],
+                    "serve": true,
+                    "send": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c5830191a1b1c1d1e1f2021222324dbc9d7fdb571ee668d5ab9462d473371baa92a577fce4d0a4d2f37d0fc18a1477992ba83",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c583018191a1b1c1d1e1f202122231bb556aa39943e2ed9b960fe3392c9abf7a86aa057be56c8b3c9a28a1ac1deed5d64461f",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58301718191a1b1c1d1e1f202122df51b8bbc5b2efc76fe3b7116d42e6b093a8be1a570d0bcfa023b43e0b4b8dbee719c713",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c5830161718191a1b1c1d1e1f2021d38b4d344454fc3e4a84b1953530e820a1777b6a59d25455548f3e3cea292b2e0d0c3105",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c583015161718191a1b1c1d1e1f200fecb105f12378d01e6dcb38b6471ff7ed414e0babe89d6ff03aa8a7c46c723fa8ad0b8c",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58301415161718191a1b1c1d1e1f768c8e64cc258fa4e2c7d1b9243500d77effeb777103752bb2538d3b8e8f906de27acb09",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c5830131415161718191a1b1c1d1e78f54d9b3ad97eadcdfec54f99f906d08c92f409c3eef9bab929fc8ccee054c9027f5b2b",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c583012131415161718191a1b1c1d01cc9f984438606a0f3e1dedfb849fb9e99d11a69d1a1d0a72b45c5f1b57b4240224bed6",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58301112131415161718191a1b1cda654e55c6ecf4f8c8c8dbc97a08df697e75a6ece49b65e8814dc17865306e0ad288b660",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c5830101112131415161718191a1bcb6702a567fd6886b5496ca77f6f48bf4f2db6cd1d76259d135aa3a21c9b4d8154b04d74",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300f101112131415161718191a862feaffc05853f50823d68cbac03dc79970408dd17f33521c4787f0e61d0084ffe9fb4e",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300e0f10111213141516171819b43ec12d9eff7e7e14a87f08554fd22b0bdcaad40e21fcae913706b95b9047676dad23a3",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300d0e0f101112131415161718a91e6328da164ab46d56fa9be32fb55125124727f17aebca6ec5d721dbc37dbc23919b35",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300c0d0e0f1011121314151617092519d484dfc09fe1c9d8bad6ccc9d3ef3f95981dd38a6a802330d6fc9bfe3cf2212f72",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300b0c0d0e0f101112131415164df6d0267ab919c544b7712685c6cd093b380e0baa4acaddea73dcacd89f7b55545a20c2",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300a0b0c0d0e0f101112131415ebd239b53a4aeb2988c88ea746a837d306a31604c5fb2cd9154929cfee2c1d313a660aa8",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f090a0b0c0d0e0f10111213143a270c8199e86454dee818ead91f5552e59bf4f1d176c2ac5d07d37f2ea632f3671830",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f08090a0b0c0d0e0f10111213ddfdf5e48fd5e189618416401bac3b6275c0590c7390ddd95fd119be99947a42c316f0",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0708090a0b0c0d0e0f10111201f9c2ecc577e68e7e08e343cc594bb929c93fef89ae860715e95dc364aa2a7d19cb73",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f060708090a0b0c0d0e0f1011c19a06c664385c911738916612ad02ac5b4f5d93039f69a9e81c10b04ea87272b39655",
+                            "hops": 1,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": [
+                        "patronage",
+                        "patronage",
+                        "patronage",
+                        "patronage",
+                        "patronage"
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "app: budget full",
+            "setting": "app",
+            "patronFrom": "5050505050505050",
+            "steps": [
+                {
+                    "t": 0,
+                    "note": "20 messages for Clara",
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263edfd1856332901bfafa0958575dde28f58",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb6046b6daa758b8892ced1582ba582becd61",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f030405060708090a0b0c0d0e29d9fa072247801ee9485998fef0f87a0d949c9531f93643beaaeb7f9b547190730460",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0405060708090a0b0c0d0e0ff244e59116439c331e91f3b8808d5a3f8a320a9b5fa3e3008725bd3ac0be82174fb7f3",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f05060708090a0b0c0d0e0f10a4fef06db2d3a72d3ebff53fcf468e85e2d5ddb53aeb9cea667a1bf5d10ed803252d0f",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f060708090a0b0c0d0e0f1011c19a06c664385c911738916612ad02ac5b4f5d93039f69a9e81c10b04ea87272b39655",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0708090a0b0c0d0e0f10111201f9c2ecc577e68e7e08e343cc594bb929c93fef89ae860715e95dc364aa2a7d19cb73",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f08090a0b0c0d0e0f10111213ddfdf5e48fd5e189618416401bac3b6275c0590c7390ddd95fd119be99947a42c316f0",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f090a0b0c0d0e0f10111213143a270c8199e86454dee818ead91f5552e59bf4f1d176c2ac5d07d37f2ea632f3671830",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300a0b0c0d0e0f101112131415ebd239b53a4aeb2988c88ea746a837d306a31604c5fb2cd9154929cfee2c1d313a660aa8",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300b0c0d0e0f101112131415164df6d0267ab919c544b7712685c6cd093b380e0baa4acaddea73dcacd89f7b55545a20c2",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300c0d0e0f1011121314151617092519d484dfc09fe1c9d8bad6ccc9d3ef3f95981dd38a6a802330d6fc9bfe3cf2212f72",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300d0e0f101112131415161718a91e6328da164ab46d56fa9be32fb55125124727f17aebca6ec5d721dbc37dbc23919b35",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300e0f10111213141516171819b43ec12d9eff7e7e14a87f08554fd22b0bdcaad40e21fcae913706b95b9047676dad23a3",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300f101112131415161718191a862feaffc05853f50823d68cbac03dc79970408dd17f33521c4787f0e61d0084ffe9fb4e",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c5830101112131415161718191a1bcb6702a567fd6886b5496ca77f6f48bf4f2db6cd1d76259d135aa3a21c9b4d8154b04d74",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58301112131415161718191a1b1cda654e55c6ecf4f8c8c8dbc97a08df697e75a6ece49b65e8814dc17865306e0ad288b660",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c583012131415161718191a1b1c1d01cc9f984438606a0f3e1dedfb849fb9e99d11a69d1a1d0a72b45c5f1b57b4240224bed6",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c5830131415161718191a1b1c1d1e78f54d9b3ad97eadcdfec54f99f906d08c92f409c3eef9bab929fc8ccee054c9027f5b2b",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58301415161718191a1b1c1d1e1f768c8e64cc258fa4e2c7d1b9243500d77effeb777103752bb2538d3b8e8f906de27acb09",
+                            "ts": 1762000000
+                        }
+                    ],
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 0,
+                    "note": "Clara asks",
+                    "ask": {
+                        "packet": "414e01824fa300140148a1a1a1a1a1a1a1a1070040",
+                        "hops": 1,
+                        "snr": 5.0,
+                        "gateway": null,
+                        "jitterMs": 0,
+                        "patronKey": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 2000,
+                    "note": "offer",
+                    "send": [
+                        {
+                            "packet": "414e01825830a300150148505050505050505004582079a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a40",
+                            "hops": 1,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 3000,
+                    "note": "pickup: five",
+                    "pickup": "414e01825840a500160148a1a1a1a1a1a1a1a1024879a631eede1bf9c90458203d41a359ccbb4064475bf7ea5f93928fb04d4753780af7d12e3e301736f786020a1a000777e45842d8928c27a5cccbc5163704642c043ec94abcdeea42efbd302668efca43641cf0c4db1ea4f9bccc48f8a95f093b4334af05ec1fae190ec2e7570a92f7ed2dd07bffe1",
+                    "send": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263edfd1856332901bfafa0958575dde28f58",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb6046b6daa758b8892ced1582ba582becd61",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f030405060708090a0b0c0d0e29d9fa072247801ee9485998fef0f87a0d949c9531f93643beaaeb7f9b547190730460",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0405060708090a0b0c0d0e0ff244e59116439c331e91f3b8808d5a3f8a320a9b5fa3e3008725bd3ac0be82174fb7f3",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f05060708090a0b0c0d0e0f10a4fef06db2d3a72d3ebff53fcf468e85e2d5ddb53aeb9cea667a1bf5d10ed803252d0f",
+                            "hops": 1,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 62000,
+                    "note": "messages for Bob",
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f0102030405060708090a0b0ccba029e4e1a033596037dbdc15a6d7356263edaa2b37a3e5acb1314c6d7e3629f10a59",
+                            "ts": 1762000062
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f02030405060708090a0b0c0d46b17c8c9c34b3e072383fb130dae462eeb6043c5ecbe547259c503da0d0e676ad4860",
+                            "ts": 1762000062
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f030405060708090a0b0c0d0e29d9fa07228740de298899583ef0f87a0d949cc20298a68f13a4759363af3264608161",
+                            "ts": 1762000062
+                        }
+                    ],
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 62000,
+                    "note": "Bob asks",
+                    "ask": {
+                        "packet": "414e01824fa300140148a2a2a2a2a2a2a2a2070040",
+                        "hops": 1,
+                        "snr": 5.0,
+                        "gateway": null,
+                        "jitterMs": 0,
+                        "patronKey": "434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 64000,
+                    "note": "offer: fifteen packets left in the budget",
+                    "send": [
+                        {
+                            "packet": "414e01825830a3001501485050505050505050045820d87a9cb8b89ec911ce8e7cc97cf61b6fc37936d237ee67f29956d8931130180640",
+                            "hops": 1,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 64500,
+                    "note": "next reading: fifteen more for Clara, the budget is used up",
+                    "serve": true,
+                    "send": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f060708090a0b0c0d0e0f1011c19a06c664385c911738916612ad02ac5b4f5d93039f69a9e81c10b04ea87272b39655",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0708090a0b0c0d0e0f10111201f9c2ecc577e68e7e08e343cc594bb929c93fef89ae860715e95dc364aa2a7d19cb73",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f08090a0b0c0d0e0f10111213ddfdf5e48fd5e189618416401bac3b6275c0590c7390ddd95fd119be99947a42c316f0",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f090a0b0c0d0e0f10111213143a270c8199e86454dee818ead91f5552e59bf4f1d176c2ac5d07d37f2ea632f3671830",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300a0b0c0d0e0f101112131415ebd239b53a4aeb2988c88ea746a837d306a31604c5fb2cd9154929cfee2c1d313a660aa8",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300b0c0d0e0f101112131415164df6d0267ab919c544b7712685c6cd093b380e0baa4acaddea73dcacd89f7b55545a20c2",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300c0d0e0f1011121314151617092519d484dfc09fe1c9d8bad6ccc9d3ef3f95981dd38a6a802330d6fc9bfe3cf2212f72",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300d0e0f101112131415161718a91e6328da164ab46d56fa9be32fb55125124727f17aebca6ec5d721dbc37dbc23919b35",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300e0f10111213141516171819b43ec12d9eff7e7e14a87f08554fd22b0bdcaad40e21fcae913706b95b9047676dad23a3",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300f101112131415161718191a862feaffc05853f50823d68cbac03dc79970408dd17f33521c4787f0e61d0084ffe9fb4e",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c5830101112131415161718191a1bcb6702a567fd6886b5496ca77f6f48bf4f2db6cd1d76259d135aa3a21c9b4d8154b04d74",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58301112131415161718191a1b1cda654e55c6ecf4f8c8c8dbc97a08df697e75a6ece49b65e8814dc17865306e0ad288b660",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c583012131415161718191a1b1c1d01cc9f984438606a0f3e1dedfb849fb9e99d11a69d1a1d0a72b45c5f1b57b4240224bed6",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c5830131415161718191a1b1c1d1e78f54d9b3ad97eadcdfec54f99f906d08c92f409c3eef9bab929fc8ccee054c9027f5b2b",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58301415161718191a1b1c1d1e1f768c8e64cc258fa4e2c7d1b9243500d77effeb777103752bb2538d3b8e8f906de27acb09",
+                            "hops": 1,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 65000,
+                    "note": "pickup: budget full, all three held back",
+                    "pickup": "414e01825840a500160148a2a2a2a2a2a2a2a20248d87a9cb8b89ec911045820016fe972ee15bffc83ff35d19d3e149a4a515dc1515bf05c6b182928ae3cb9140a1a000777e45842ba5ddc76f0334076895031afee4868a31f5f25abaa476dd958d03073b108ac480a8122c4fbb4e8587b9baa412c7d25a3a310ba08d04f751fa5e3dd0bb21b6cd17a84",
+                    "send": [],
+                    "limits": [
+                        "gateway",
+                        "gateway",
+                        "gateway"
+                    ]
+                },
+                {
+                    "t": 124000,
+                    "note": "Bob asks again",
+                    "ask": {
+                        "packet": "414e01824fa300140148a2a2a2a2a2a2a2a2070040",
+                        "hops": 1,
+                        "snr": 5.0,
+                        "gateway": null,
+                        "jitterMs": 0,
+                        "patronKey": "464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 126000,
+                    "note": "budget full: no offer",
+                    "send": [],
+                    "limits": [
+                        "gateway"
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "app: nothing twice to the same asker in an hour",
+            "setting": "app",
+            "patronFrom": "5050505050505050",
+            "steps": [
+                {
+                    "t": 0,
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648e05a4fcb50b22fc4582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263ed7daadac95470208cdc5fa75e5e8493b6",
+                            "ts": 1761996400
+                        },
+                        {
+                            "packet": "414e01825819a40001014833333333333333330300064846210e7aa18f8933582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb6044b9756c1c3b6b3ecb8a4cd591c1a80ee",
+                            "ts": 1761992800
+                        }
+                    ],
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 0,
+                    "note": "Clara asks",
+                    "ask": {
+                        "packet": "414e01824fa300140148a1a1a1a1a1a1a1a1070040",
+                        "hops": 1,
+                        "snr": 5.0,
+                        "gateway": null,
+                        "jitterMs": 0,
+                        "patronKey": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 2000,
+                    "note": "offer",
+                    "send": [
+                        {
+                            "packet": "414e01825830a300150148505050505050505004582079a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a40",
+                            "hops": 1,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 3000,
+                    "note": "pickup: both packets",
+                    "pickup": "414e01825840a500160148a1a1a1a1a1a1a1a1024879a631eede1bf9c90458203d41a359ccbb4064475bf7ea5f93928fb04d4753780af7d12e3e301736f786020a1a000777e458429fa280af481f8ba84d0be1fe64a8079f2f463e4b5424fd288d0adb3df42339e1a422dc0f8f7308e5c7f9339e4d4b1cda62e23f695d3789500e6423abfd0d3860d667",
+                    "send": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648e05a4fcb50b22fc4582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263ed7daadac95470208cdc5fa75e5e8493b6",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a40001014833333333333333330300064846210e7aa18f8933582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb6044b9756c1c3b6b3ecb8a4cd591c1a80ee",
+                            "hops": 1,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 300000,
+                    "note": "Clara asks again, same since",
+                    "ask": {
+                        "packet": "414e01824fa300140148a1a1a1a1a1a1a1a1070040",
+                        "hops": 1,
+                        "snr": 5.0,
+                        "gateway": null,
+                        "jitterMs": 0,
+                        "patronKey": "434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 302000,
+                    "note": "offer",
+                    "send": [
+                        {
+                            "packet": "414e01825830a3001501485050505050505050045820d87a9cb8b89ec911ce8e7cc97cf61b6fc37936d237ee67f29956d8931130180640",
+                            "hops": 1,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 303000,
+                    "note": "pickup with a new one-time key: nothing again",
+                    "pickup": "414e01825840a500160148a1a1a1a1a1a1a1a10248d87a9cb8b89ec91104582043f276c4881efa6f7e1118aa7a59b1ebb1bf750c3206325109cb0f74c6a83f080a1a000777e4584224536e0091ba5e0890b9a46036c623c85b8da423ba53c0e59a246484810ea2efb63de13b9b66808ee1cddb16dcc4f83968a95b8a999e0c8e020c0031c413c225d590",
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 600000,
+                    "note": "a new message for Clara: once, though two patronages wait for it",
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f030405060708090a0b0c0d0e29d9fa072247801ee9485998fef0f87a0d949c9531f93643beaaeb7f9b547190730460",
+                            "ts": 1762000600
+                        }
+                    ],
+                    "serve": true,
+                    "send": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f030405060708090a0b0c0d0e29d9fa072247801ee9485998fef0f87a0d949c9531f93643beaaeb7f9b547190730460",
+                            "hops": 1,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 4200001,
+                    "note": "Clara asks again more than an hour later",
+                    "ask": {
+                        "packet": "414e01824fa300140148a1a1a1a1a1a1a1a1070040",
+                        "hops": 1,
+                        "snr": 5.0,
+                        "gateway": null,
+                        "jitterMs": 0,
+                        "patronKey": "464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 4202001,
+                    "note": "offer",
+                    "send": [
+                        {
+                            "packet": "414e01825830a3001501485050505050505050045820143fdc5a07b572d2639d9d1406e1d2c5c6c4a0193b13023ec589478d00b1663b40",
+                            "hops": 1,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 4203001,
+                    "note": "pickup: all three again",
+                    "pickup": "414e01825840a500160148a1a1a1a1a1a1a1a10248143fdc5a07b572d20458206c1ab7a99d35f766053628b1159a8d454c13a9806f7f2767077189ac326588080a1a000777e45842813dca2c0fd27d17dd9e5326334b0a851db925351cbc6b2480b2d6e4e0f24120b8a00c42be7caaf316ee54d0551e5c1d27849fd2712592f40560288b866a57ce0e76",
+                    "send": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f030405060708090a0b0c0d0e29d9fa072247801ee9485998fef0f87a0d949c9531f93643beaaeb7f9b547190730460",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648e05a4fcb50b22fc4582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263ed7daadac95470208cdc5fa75e5e8493b6",
+                            "hops": 1,
+                            "gateway": null
+                        },
+                        {
+                            "packet": "414e01825819a40001014833333333333333330300064846210e7aa18f8933582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb6044b9756c1c3b6b3ecb8a4cd591c1a80ee",
+                            "hops": 1,
+                            "gateway": null
+                        }
+                    ],
+                    "limits": []
+                }
+            ]
+        },
+        {
+            "name": "bridge: patron delivers the last 30 days",
+            "setting": "bridge",
+            "patronFrom": "5050505050505050",
+            "steps": [
+                {
+                    "t": 0,
+                    "note": "radio inbox: Clara 5 h and 20 days ago, Clara 31 days ago, Bob",
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006488c5bb9a6c357faa2582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263ed00851f297aa806adb9d8f06147d6a188",
+                            "ts": 1761982000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648743a5d51f7c08b20582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb6041a7704a314bec73e43e3dcbb5c56ae8e",
+                            "ts": 1760272000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf637e45b0728413582f030405060708090a0b0c0d0e29d9fa072247801ee9485998fef0f87a0d949c7ecfcf485d17d0af903697dc76702361",
+                            "ts": 1759321600
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648ad37d9d2ba4ca9e9582f0405060708090a0b0c0d0e0ff244e59116835cf3de513378408d5a3f8a320ad42f98f76a03e36d32d0077ee9bd0a0e",
+                            "ts": 1761996400
+                        }
+                    ],
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 0,
+                    "note": "Clara asks, 2 hops, SNR 6 dB",
+                    "ask": {
+                        "packet": "414e01824fa300140148a1a1a1a1a1a1a1a1070040",
+                        "hops": 2,
+                        "snr": 6.0,
+                        "gateway": "gw-a",
+                        "jitterMs": 700,
+                        "patronKey": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 30699,
+                    "note": "still waiting",
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 30700,
+                    "note": "offer with a one-time key",
+                    "send": [
+                        {
+                            "packet": "414e01825830a300150148505050505050505004582079a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a40",
+                            "hops": 2,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 33700,
+                    "note": "Clara's pickup: her packets of the last 30 days, newest first",
+                    "pickup": "414e01825840a500160148a1a1a1a1a1a1a1a1024879a631eede1bf9c90458203d41a359ccbb4064475bf7ea5f93928fb04d4753780af7d12e3e301736f786020a1a000777e4584233b2cd64917b058734e90e4fea88b804a92a4262d163ec4202e2aaed40e44831f11c53980aea54d10bcd69b68e732eaea465edd92c576fa449d4ff0dbae235f52d4f",
+                    "send": [
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006488c5bb9a6c357faa2582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263ed00851f297aa806adb9d8f06147d6a188",
+                            "hops": 2,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648743a5d51f7c08b20582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb6041a7704a314bec73e43e3dcbb5c56ae8e",
+                            "hops": 2,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 63700,
+                    "note": "reading the radio inbox again sends nothing twice",
+                    "serve": true,
+                    "send": [],
+                    "limits": []
+                }
+            ]
+        },
+        {
+            "name": "bridge: app on site was faster",
+            "setting": "bridge",
+            "patronFrom": "5050505050505050",
+            "steps": [
+                {
+                    "t": 0,
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648e05a4fcb50b22fc4582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263ed7daadac95470208cdc5fa75e5e8493b6",
+                            "ts": 1761996400
+                        }
+                    ],
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 0,
+                    "note": "Clara asks, weak signal",
+                    "ask": {
+                        "packet": "414e01824fa300140148a1a1a1a1a1a1a1a1070040",
+                        "hops": 1,
+                        "snr": -15.0,
+                        "gateway": "gw-a",
+                        "jitterMs": 1500,
+                        "patronKey": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 21000,
+                    "note": "a patron answers",
+                    "patron": "414e01825830a3001501485555555555555555045820666666666666666666666666666666666666666666666666666666666666666640",
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 31500,
+                    "note": "our wait is over: nothing",
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 91500,
+                    "note": "nothing later either",
+                    "serve": true,
+                    "send": [],
+                    "limits": []
+                }
+            ]
+        },
+        {
+            "name": "bridge: patron heard before the ask",
+            "setting": "bridge",
+            "patronFrom": "5050505050505050",
+            "steps": [
+                {
+                    "t": 0,
+                    "note": "a patron for someone else",
+                    "patron": "414e01825830a3001501485555555555555555045820666666666666666666666666666666666666666666666666666666666666666640",
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 1000,
+                    "note": "Clara asks",
+                    "ask": {
+                        "packet": "414e01824fa300140148a1a1a1a1a1a1a1a1070040",
+                        "hops": 1,
+                        "snr": 0.0,
+                        "gateway": "gw-a",
+                        "jitterMs": 0,
+                        "patronKey": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 31000,
+                    "note": "offer",
+                    "send": [
+                        {
+                            "packet": "414e01825830a300150148505050505050505004582079a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a40",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                }
+            ]
+        },
+        {
+            "name": "bridge: five per ask at the pickup, the rest with the next reading",
+            "setting": "bridge",
+            "patronFrom": "5050505050505050",
+            "steps": [
+                {
+                    "t": 0,
+                    "note": "eight packets for Clara",
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263edfd1856332901bfafa0958575dde28f58",
+                            "ts": 1761999400
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb6046b6daa758b8892ced1582ba582becd61",
+                            "ts": 1761998800
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f030405060708090a0b0c0d0e29d9fa072247801ee9485998fef0f87a0d949c9531f93643beaaeb7f9b547190730460",
+                            "ts": 1761998200
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0405060708090a0b0c0d0e0ff244e59116439c331e91f3b8808d5a3f8a320a9b5fa3e3008725bd3ac0be82174fb7f3",
+                            "ts": 1761997600
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f05060708090a0b0c0d0e0f10a4fef06db2d3a72d3ebff53fcf468e85e2d5ddb53aeb9cea667a1bf5d10ed803252d0f",
+                            "ts": 1761997000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f060708090a0b0c0d0e0f1011c19a06c664385c911738916612ad02ac5b4f5d93039f69a9e81c10b04ea87272b39655",
+                            "ts": 1761996400
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0708090a0b0c0d0e0f10111201f9c2ecc577e68e7e08e343cc594bb929c93fef89ae860715e95dc364aa2a7d19cb73",
+                            "ts": 1761995800
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f08090a0b0c0d0e0f10111213ddfdf5e48fd5e189618416401bac3b6275c0590c7390ddd95fd119be99947a42c316f0",
+                            "ts": 1761995200
+                        }
+                    ],
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 0,
+                    "ask": {
+                        "packet": "414e01824fa300140148a1a1a1a1a1a1a1a1070040",
+                        "hops": 1,
+                        "snr": 5.0,
+                        "gateway": "gw-a",
+                        "jitterMs": 0,
+                        "patronKey": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 30000,
+                    "note": "offer",
+                    "send": [
+                        {
+                            "packet": "414e01825830a300150148505050505050505004582079a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a40",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 31000,
+                    "note": "pickup: the five newest",
+                    "pickup": "414e01825840a500160148a1a1a1a1a1a1a1a1024879a631eede1bf9c90458203d41a359ccbb4064475bf7ea5f93928fb04d4753780af7d12e3e301736f786020a1a000777e45842b9d5fa67903c3be07ed97fc4b9b66cd9bed82de708a118ad81d48abd5c4a220a61f31403e4fa64ac98bb332a21fb4059835240746ae030a9e10647240b4c63e1aaa5",
+                    "send": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263edfd1856332901bfafa0958575dde28f58",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb6046b6daa758b8892ced1582ba582becd61",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f030405060708090a0b0c0d0e29d9fa072247801ee9485998fef0f87a0d949c9531f93643beaaeb7f9b547190730460",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0405060708090a0b0c0d0e0ff244e59116439c331e91f3b8808d5a3f8a320a9b5fa3e3008725bd3ac0be82174fb7f3",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f05060708090a0b0c0d0e0f10a4fef06db2d3a72d3ebff53fcf468e85e2d5ddb53aeb9cea667a1bf5d10ed803252d0f",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 61000,
+                    "note": "next reading: the other three",
+                    "serve": true,
+                    "send": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f060708090a0b0c0d0e0f1011c19a06c664385c911738916612ad02ac5b4f5d93039f69a9e81c10b04ea87272b39655",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0708090a0b0c0d0e0f10111201f9c2ecc577e68e7e08e343cc594bb929c93fef89ae860715e95dc364aa2a7d19cb73",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f08090a0b0c0d0e0f10111213ddfdf5e48fd5e189618416401bac3b6275c0590c7390ddd95fd119be99947a42c316f0",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                }
+            ]
+        },
+        {
+            "name": "bridge: since minus ten minutes",
+            "setting": "bridge",
+            "patronFrom": "5050505050505050",
+            "steps": [
+                {
+                    "t": 0,
+                    "note": "put one second before, at and one second after since minus 10 minutes",
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648e05a4fcb50b22fc4582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263ed7daadac95470208cdc5fa75e5e8493b6",
+                            "ts": 1761995799
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648e05a4fcb50b22fc4582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb604ebdf268ff6f90dedad92098e01d8d18f",
+                            "ts": 1761995800
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648e05a4fcb50b22fc4582f030405060708090a0b0c0d0e29d9fa072247801ee9485998fef0f87a0d949c158375cc3ecf35c80351765a1315188e",
+                            "ts": 1761995801
+                        }
+                    ],
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 0,
+                    "note": "Clara asks, since 60 minutes before the start",
+                    "ask": {
+                        "packet": "414e018253a300140148a1a1a1a1a1a1a1a1071a6905ee7040",
+                        "hops": 1,
+                        "snr": null,
+                        "gateway": "gw-a",
+                        "jitterMs": 300,
+                        "patronKey": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 30300,
+                    "note": "offer",
+                    "send": [
+                        {
+                            "packet": "414e01825830a300150148505050505050505004582079a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a40",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 31300,
+                    "note": "only the packet later than since minus 10 minutes",
+                    "pickup": "414e01825840a500160148a1a1a1a1a1a1a1a1024879a631eede1bf9c90458203d41a359ccbb4064475bf7ea5f93928fb04d4753780af7d12e3e301736f786020a1a000777e458420c7f5d630b342686a73b7f1f203c93068ea905038cf3fc34eea922171779b59e75b248224157bcfa8c451aa1a1b063cf13ba00fd1b16070873c2cc4a722f0c9ebc78",
+                    "send": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648e05a4fcb50b22fc4582f030405060708090a0b0c0d0e29d9fa072247801ee9485998fef0f87a0d949c158375cc3ecf35c80351765a1315188e",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                }
+            ]
+        },
+        {
+            "name": "bridge: hop limit at least one",
+            "setting": "bridge",
+            "patronFrom": "5050505050505050",
+            "steps": [
+                {
+                    "t": 0,
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263edfd1856332901bfafa0958575dde28f58",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f02030405060708090a0b0c0d46b17c8c9c34b3e072383fb130dae462eeb6043c5ecbe547259c503da0d0e676ad4860",
+                            "ts": 1762000000
+                        }
+                    ],
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 0,
+                    "note": "Clara asks, heard directly (0 hops)",
+                    "ask": {
+                        "packet": "414e01824fa300140148a1a1a1a1a1a1a1a1070040",
+                        "hops": 0,
+                        "snr": 10.0,
+                        "gateway": "gw-a",
+                        "jitterMs": 0,
+                        "patronKey": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 0,
+                    "note": "Bob asks, hops unknown",
+                    "ask": {
+                        "packet": "414e01824fa300140148a2a2a2a2a2a2a2a2070040",
+                        "hops": null,
+                        "snr": 10.0,
+                        "gateway": "gw-b",
+                        "jitterMs": 0,
+                        "patronKey": "434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 30000,
+                    "note": "two offers",
+                    "send": [
+                        {
+                            "packet": "414e01825830a300150148505050505050505004582079a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a40",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825830a3001501485050505050505050045820d87a9cb8b89ec911ce8e7cc97cf61b6fc37936d237ee67f29956d8931130180640",
+                            "hops": null,
+                            "gateway": "gw-b"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 31000,
+                    "note": "Clara's pickup: hop limit 1",
+                    "pickup": "414e01825840a500160148a1a1a1a1a1a1a1a1024879a631eede1bf9c90458203d41a359ccbb4064475bf7ea5f93928fb04d4753780af7d12e3e301736f786020a1a000777e458425fd51ec2f6d53f52f3dc807ec607127c65460d8123786cf4644bb60afbb2c3608c7181a4f8a6c910bdf7a5271fe762d9c591c505f6315d69d053831caa246b57aaf8",
+                    "send": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263edfd1856332901bfafa0958575dde28f58",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 32000,
+                    "note": "Bob's pickup: hop limit 3",
+                    "pickup": "414e01825840a500160148a2a2a2a2a2a2a2a20248d87a9cb8b89ec911045820016fe972ee15bffc83ff35d19d3e149a4a515dc1515bf05c6b182928ae3cb9140a1a000777e4584210c0327976abf15a100c28dbdd8d15f567f46f9db3209e776e7ba5248218053ca3718cf719ca22602104734fd92d0afbe1bc07e8fe06e3f8bd900d58c6fcf92bc5fb",
+                    "send": [
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f02030405060708090a0b0c0d46b17c8c9c34b3e072383fb130dae462eeb6043c5ecbe547259c503da0d0e676ad4860",
+                            "hops": 3,
+                            "gateway": "gw-b"
+                        }
+                    ],
+                    "limits": []
+                }
+            ]
+        },
+        {
+            "name": "bridge: pickup for another patron or too late",
+            "setting": "bridge",
+            "patronFrom": "5050505050505050",
+            "steps": [
+                {
+                    "t": 0,
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263edfd1856332901bfafa0958575dde28f58",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f02030405060708090a0b0c0d46b17c8c9c34b3e072383fb130dae462eeb6043c5ecbe547259c503da0d0e676ad4860",
+                            "ts": 1762000000
+                        }
+                    ],
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 0,
+                    "ask": {
+                        "packet": "414e01824fa300140148a1a1a1a1a1a1a1a1070040",
+                        "hops": 1,
+                        "snr": 5.0,
+                        "gateway": "gw-a",
+                        "jitterMs": 0,
+                        "patronKey": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 30000,
+                    "note": "offer",
+                    "send": [
+                        {
+                            "packet": "414e01825830a300150148505050505050505004582079a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a40",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 31000,
+                    "note": "pickup for another patron",
+                    "pickup": "414e01825840a500160148a1a1a1a1a1a1a1a102481cf579aba45a10ba0458203d41a359ccbb4064475bf7ea5f93928fb04d4753780af7d12e3e301736f786020a1a000777e4584292cb959f3bfd190adb1585e7d035f24778c0300a72075944a5290780e19cc9d1625f071a87f736a24b8643eb46418c5c7adcd5c351d9fb8517167b6a85b67fd1d699",
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 90000,
+                    "note": "Bob asks",
+                    "ask": {
+                        "packet": "414e01824fa300140148a2a2a2a2a2a2a2a2070040",
+                        "hops": 1,
+                        "snr": 5.0,
+                        "gateway": "gw-a",
+                        "jitterMs": 0,
+                        "patronKey": "434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 120000,
+                    "note": "offer for Bob",
+                    "send": [
+                        {
+                            "packet": "414e01825830a3001501485050505050505050045820d87a9cb8b89ec911ce8e7cc97cf61b6fc37936d237ee67f29956d8931130180640",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 240001,
+                    "note": "Bob's pickup comes too late",
+                    "pickup": "414e01825840a500160148a2a2a2a2a2a2a2a20248d87a9cb8b89ec911045820016fe972ee15bffc83ff35d19d3e149a4a515dc1515bf05c6b182928ae3cb9140a1a000777e4584228e4a7eec0e43a12511fa9135bd31842c3286e64b27a5b9e3ce13f88ec888cb23ec0f26ae9bfad11c6392651e1af576229dee5e01c118436c7aa4b1e1c76ce6c19bc",
+                    "send": [],
+                    "limits": []
+                }
+            ]
+        },
+        {
+            "name": "bridge: patronage for sixty minutes",
+            "setting": "bridge",
+            "patronFrom": "5050505050505050",
+            "steps": [
+                {
+                    "t": 0,
+                    "ask": {
+                        "packet": "414e01824fa300140148a1a1a1a1a1a1a1a1070040",
+                        "hops": 1,
+                        "snr": 5.0,
+                        "gateway": "gw-a",
+                        "jitterMs": 0,
+                        "patronKey": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 30000,
+                    "note": "offer",
+                    "send": [
+                        {
+                            "packet": "414e01825830a300150148505050505050505004582079a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a40",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 31000,
+                    "note": "pickup, nothing waiting yet",
+                    "pickup": "414e01825840a500160148a1a1a1a1a1a1a1a1024879a631eede1bf9c90458203d41a359ccbb4064475bf7ea5f93928fb04d4753780af7d12e3e301736f786020a1a000777e458429fb50cd5136821212c2c9b7c6b9525f963451bdeeeadd8927c296ac281f7f3a27f2ae9e6de2fe5c2456373f99bf38b5e941863215369d5e8948d54ee0f840206fea7",
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 630000,
+                    "note": "new message for Clara",
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263edfd1856332901bfafa0958575dde28f58",
+                            "ts": 1762000600
+                        }
+                    ],
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 660000,
+                    "note": "sent at the next reading",
+                    "serve": true,
+                    "send": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263edfd1856332901bfafa0958575dde28f58",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 3631000,
+                    "note": "another one, at the last moment",
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb6046b6daa758b8892ced1582ba582becd61",
+                            "ts": 1762003631
+                        }
+                    ],
+                    "serve": true,
+                    "send": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb6046b6daa758b8892ced1582ba582becd61",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 3631001,
+                    "note": "a third one: the patronage is over",
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f030405060708090a0b0c0d0e29d9fa072247801ee9485998fef0f87a0d949c9531f93643beaaeb7f9b547190730460",
+                            "ts": 1762003632
+                        }
+                    ],
+                    "serve": true,
+                    "send": [],
+                    "limits": []
+                }
+            ]
+        },
+        {
+            "name": "bridge: twenty per hour and patronage",
+            "setting": "bridge",
+            "patronFrom": "5050505050505050",
+            "steps": [
+                {
+                    "t": 0,
+                    "ask": {
+                        "packet": "414e01824fa300140148a1a1a1a1a1a1a1a1070040",
+                        "hops": 1,
+                        "snr": 5.0,
+                        "gateway": "gw-a",
+                        "jitterMs": 0,
+                        "patronKey": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 30000,
+                    "note": "offer",
+                    "send": [
+                        {
+                            "packet": "414e01825830a300150148505050505050505004582079a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a40",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 31000,
+                    "note": "pickup, nothing waiting yet",
+                    "pickup": "414e01825840a500160148a1a1a1a1a1a1a1a1024879a631eede1bf9c90458203d41a359ccbb4064475bf7ea5f93928fb04d4753780af7d12e3e301736f786020a1a000777e45842c49ccf8250ad99261928acdf773ec1393ad1856c1f2173d7995117c6d73439514aba32b353d597b6ca6e7ba2c2f2bc7a4d9b69ba918f44b1c7e61444db666de2d9dd",
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 90000,
+                    "note": "25 new messages for Clara: 20 go out",
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263edfd1856332901bfafa0958575dde28f58",
+                            "ts": 1762000061
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb6046b6daa758b8892ced1582ba582becd61",
+                            "ts": 1762000062
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f030405060708090a0b0c0d0e29d9fa072247801ee9485998fef0f87a0d949c9531f93643beaaeb7f9b547190730460",
+                            "ts": 1762000063
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0405060708090a0b0c0d0e0ff244e59116439c331e91f3b8808d5a3f8a320a9b5fa3e3008725bd3ac0be82174fb7f3",
+                            "ts": 1762000064
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f05060708090a0b0c0d0e0f10a4fef06db2d3a72d3ebff53fcf468e85e2d5ddb53aeb9cea667a1bf5d10ed803252d0f",
+                            "ts": 1762000065
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f060708090a0b0c0d0e0f1011c19a06c664385c911738916612ad02ac5b4f5d93039f69a9e81c10b04ea87272b39655",
+                            "ts": 1762000066
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0708090a0b0c0d0e0f10111201f9c2ecc577e68e7e08e343cc594bb929c93fef89ae860715e95dc364aa2a7d19cb73",
+                            "ts": 1762000067
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f08090a0b0c0d0e0f10111213ddfdf5e48fd5e189618416401bac3b6275c0590c7390ddd95fd119be99947a42c316f0",
+                            "ts": 1762000068
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f090a0b0c0d0e0f10111213143a270c8199e86454dee818ead91f5552e59bf4f1d176c2ac5d07d37f2ea632f3671830",
+                            "ts": 1762000069
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300a0b0c0d0e0f101112131415ebd239b53a4aeb2988c88ea746a837d306a31604c5fb2cd9154929cfee2c1d313a660aa8",
+                            "ts": 1762000070
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300b0c0d0e0f101112131415164df6d0267ab919c544b7712685c6cd093b380e0baa4acaddea73dcacd89f7b55545a20c2",
+                            "ts": 1762000071
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300c0d0e0f1011121314151617092519d484dfc09fe1c9d8bad6ccc9d3ef3f95981dd38a6a802330d6fc9bfe3cf2212f72",
+                            "ts": 1762000072
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300d0e0f101112131415161718a91e6328da164ab46d56fa9be32fb55125124727f17aebca6ec5d721dbc37dbc23919b35",
+                            "ts": 1762000073
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300e0f10111213141516171819b43ec12d9eff7e7e14a87f08554fd22b0bdcaad40e21fcae913706b95b9047676dad23a3",
+                            "ts": 1762000074
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300f101112131415161718191a862feaffc05853f50823d68cbac03dc79970408dd17f33521c4787f0e61d0084ffe9fb4e",
+                            "ts": 1762000075
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c5830101112131415161718191a1bcb6702a567fd6886b5496ca77f6f48bf4f2db6cd1d76259d135aa3a21c9b4d8154b04d74",
+                            "ts": 1762000076
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58301112131415161718191a1b1cda654e55c6ecf4f8c8c8dbc97a08df697e75a6ece49b65e8814dc17865306e0ad288b660",
+                            "ts": 1762000077
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c583012131415161718191a1b1c1d01cc9f984438606a0f3e1dedfb849fb9e99d11a69d1a1d0a72b45c5f1b57b4240224bed6",
+                            "ts": 1762000078
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c5830131415161718191a1b1c1d1e78f54d9b3ad97eadcdfec54f99f906d08c92f409c3eef9bab929fc8ccee054c9027f5b2b",
+                            "ts": 1762000079
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58301415161718191a1b1c1d1e1f768c8e64cc258fa4e2c7d1b9243500d77effeb777103752bb2538d3b8e8f906de27acb09",
+                            "ts": 1762000080
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c583015161718191a1b1c1d1e1f200fecb105f12378d01e6dcb38b6471ff7ed414e0babe89d6ff03aa8a7c46c723fa8ad0b8c",
+                            "ts": 1762000081
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c5830161718191a1b1c1d1e1f2021d38b4d344454fc3e4a84b1953530e820a1777b6a59d25455548f3e3cea292b2e0d0c3105",
+                            "ts": 1762000082
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58301718191a1b1c1d1e1f202122df51b8bbc5b2efc76fe3b7116d42e6b093a8be1a570d0bcfa023b43e0b4b8dbee719c713",
+                            "ts": 1762000083
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c583018191a1b1c1d1e1f202122231bb556aa39943e2ed9b960fe3392c9abf7a86aa057be56c8b3c9a28a1ac1deed5d64461f",
+                            "ts": 1762000084
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c5830191a1b1c1d1e1f2021222324dbc9d7fdb571ee668d5ab9462d473371baa92a577fce4d0a4d2f37d0fc18a1477992ba83",
+                            "ts": 1762000085
+                        }
+                    ],
+                    "serve": true,
+                    "send": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c5830191a1b1c1d1e1f2021222324dbc9d7fdb571ee668d5ab9462d473371baa92a577fce4d0a4d2f37d0fc18a1477992ba83",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c583018191a1b1c1d1e1f202122231bb556aa39943e2ed9b960fe3392c9abf7a86aa057be56c8b3c9a28a1ac1deed5d64461f",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58301718191a1b1c1d1e1f202122df51b8bbc5b2efc76fe3b7116d42e6b093a8be1a570d0bcfa023b43e0b4b8dbee719c713",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c5830161718191a1b1c1d1e1f2021d38b4d344454fc3e4a84b1953530e820a1777b6a59d25455548f3e3cea292b2e0d0c3105",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c583015161718191a1b1c1d1e1f200fecb105f12378d01e6dcb38b6471ff7ed414e0babe89d6ff03aa8a7c46c723fa8ad0b8c",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58301415161718191a1b1c1d1e1f768c8e64cc258fa4e2c7d1b9243500d77effeb777103752bb2538d3b8e8f906de27acb09",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c5830131415161718191a1b1c1d1e78f54d9b3ad97eadcdfec54f99f906d08c92f409c3eef9bab929fc8ccee054c9027f5b2b",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c583012131415161718191a1b1c1d01cc9f984438606a0f3e1dedfb849fb9e99d11a69d1a1d0a72b45c5f1b57b4240224bed6",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58301112131415161718191a1b1cda654e55c6ecf4f8c8c8dbc97a08df697e75a6ece49b65e8814dc17865306e0ad288b660",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c5830101112131415161718191a1bcb6702a567fd6886b5496ca77f6f48bf4f2db6cd1d76259d135aa3a21c9b4d8154b04d74",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300f101112131415161718191a862feaffc05853f50823d68cbac03dc79970408dd17f33521c4787f0e61d0084ffe9fb4e",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300e0f10111213141516171819b43ec12d9eff7e7e14a87f08554fd22b0bdcaad40e21fcae913706b95b9047676dad23a3",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300d0e0f101112131415161718a91e6328da164ab46d56fa9be32fb55125124727f17aebca6ec5d721dbc37dbc23919b35",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300c0d0e0f1011121314151617092519d484dfc09fe1c9d8bad6ccc9d3ef3f95981dd38a6a802330d6fc9bfe3cf2212f72",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300b0c0d0e0f101112131415164df6d0267ab919c544b7712685c6cd093b380e0baa4acaddea73dcacd89f7b55545a20c2",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300a0b0c0d0e0f101112131415ebd239b53a4aeb2988c88ea746a837d306a31604c5fb2cd9154929cfee2c1d313a660aa8",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f090a0b0c0d0e0f10111213143a270c8199e86454dee818ead91f5552e59bf4f1d176c2ac5d07d37f2ea632f3671830",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f08090a0b0c0d0e0f10111213ddfdf5e48fd5e189618416401bac3b6275c0590c7390ddd95fd119be99947a42c316f0",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0708090a0b0c0d0e0f10111201f9c2ecc577e68e7e08e343cc594bb929c93fef89ae860715e95dc364aa2a7d19cb73",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f060708090a0b0c0d0e0f1011c19a06c664385c911738916612ad02ac5b4f5d93039f69a9e81c10b04ea87272b39655",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": [
+                        "patronage",
+                        "patronage",
+                        "patronage",
+                        "patronage",
+                        "patronage"
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "bridge: budget full",
+            "setting": "bridge",
+            "patronFrom": "5050505050505050",
+            "steps": [
+                {
+                    "t": 0,
+                    "note": "20 messages for Clara",
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263edfd1856332901bfafa0958575dde28f58",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb6046b6daa758b8892ced1582ba582becd61",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f030405060708090a0b0c0d0e29d9fa072247801ee9485998fef0f87a0d949c9531f93643beaaeb7f9b547190730460",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0405060708090a0b0c0d0e0ff244e59116439c331e91f3b8808d5a3f8a320a9b5fa3e3008725bd3ac0be82174fb7f3",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f05060708090a0b0c0d0e0f10a4fef06db2d3a72d3ebff53fcf468e85e2d5ddb53aeb9cea667a1bf5d10ed803252d0f",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f060708090a0b0c0d0e0f1011c19a06c664385c911738916612ad02ac5b4f5d93039f69a9e81c10b04ea87272b39655",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0708090a0b0c0d0e0f10111201f9c2ecc577e68e7e08e343cc594bb929c93fef89ae860715e95dc364aa2a7d19cb73",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f08090a0b0c0d0e0f10111213ddfdf5e48fd5e189618416401bac3b6275c0590c7390ddd95fd119be99947a42c316f0",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f090a0b0c0d0e0f10111213143a270c8199e86454dee818ead91f5552e59bf4f1d176c2ac5d07d37f2ea632f3671830",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300a0b0c0d0e0f101112131415ebd239b53a4aeb2988c88ea746a837d306a31604c5fb2cd9154929cfee2c1d313a660aa8",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300b0c0d0e0f101112131415164df6d0267ab919c544b7712685c6cd093b380e0baa4acaddea73dcacd89f7b55545a20c2",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300c0d0e0f1011121314151617092519d484dfc09fe1c9d8bad6ccc9d3ef3f95981dd38a6a802330d6fc9bfe3cf2212f72",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300d0e0f101112131415161718a91e6328da164ab46d56fa9be32fb55125124727f17aebca6ec5d721dbc37dbc23919b35",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300e0f10111213141516171819b43ec12d9eff7e7e14a87f08554fd22b0bdcaad40e21fcae913706b95b9047676dad23a3",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300f101112131415161718191a862feaffc05853f50823d68cbac03dc79970408dd17f33521c4787f0e61d0084ffe9fb4e",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c5830101112131415161718191a1bcb6702a567fd6886b5496ca77f6f48bf4f2db6cd1d76259d135aa3a21c9b4d8154b04d74",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58301112131415161718191a1b1cda654e55c6ecf4f8c8c8dbc97a08df697e75a6ece49b65e8814dc17865306e0ad288b660",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c583012131415161718191a1b1c1d01cc9f984438606a0f3e1dedfb849fb9e99d11a69d1a1d0a72b45c5f1b57b4240224bed6",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c5830131415161718191a1b1c1d1e78f54d9b3ad97eadcdfec54f99f906d08c92f409c3eef9bab929fc8ccee054c9027f5b2b",
+                            "ts": 1762000000
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58301415161718191a1b1c1d1e1f768c8e64cc258fa4e2c7d1b9243500d77effeb777103752bb2538d3b8e8f906de27acb09",
+                            "ts": 1762000000
+                        }
+                    ],
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 0,
+                    "note": "Clara asks",
+                    "ask": {
+                        "packet": "414e01824fa300140148a1a1a1a1a1a1a1a1070040",
+                        "hops": 1,
+                        "snr": 5.0,
+                        "gateway": "gw-a",
+                        "jitterMs": 0,
+                        "patronKey": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 30000,
+                    "note": "offer",
+                    "send": [
+                        {
+                            "packet": "414e01825830a300150148505050505050505004582079a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a40",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 31000,
+                    "note": "pickup: five",
+                    "pickup": "414e01825840a500160148a1a1a1a1a1a1a1a1024879a631eede1bf9c90458203d41a359ccbb4064475bf7ea5f93928fb04d4753780af7d12e3e301736f786020a1a000777e45842aa13e923e9b65f0c60a867b255ca3a65a143eca7d202d9eee76a5c941a34487ee86508908413dde5a8ee8f2e8692e2ea96d78fe5af1139c38db84f8175be120b8db6",
+                    "send": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263edfd1856332901bfafa0958575dde28f58",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb6046b6daa758b8892ced1582ba582becd61",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f030405060708090a0b0c0d0e29d9fa072247801ee9485998fef0f87a0d949c9531f93643beaaeb7f9b547190730460",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0405060708090a0b0c0d0e0ff244e59116439c331e91f3b8808d5a3f8a320a9b5fa3e3008725bd3ac0be82174fb7f3",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f05060708090a0b0c0d0e0f10a4fef06db2d3a72d3ebff53fcf468e85e2d5ddb53aeb9cea667a1bf5d10ed803252d0f",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 61000,
+                    "note": "next reading: fifteen more",
+                    "serve": true,
+                    "send": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f060708090a0b0c0d0e0f1011c19a06c664385c911738916612ad02ac5b4f5d93039f69a9e81c10b04ea87272b39655",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f0708090a0b0c0d0e0f10111201f9c2ecc577e68e7e08e343cc594bb929c93fef89ae860715e95dc364aa2a7d19cb73",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f08090a0b0c0d0e0f10111213ddfdf5e48fd5e189618416401bac3b6275c0590c7390ddd95fd119be99947a42c316f0",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f090a0b0c0d0e0f10111213143a270c8199e86454dee818ead91f5552e59bf4f1d176c2ac5d07d37f2ea632f3671830",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300a0b0c0d0e0f101112131415ebd239b53a4aeb2988c88ea746a837d306a31604c5fb2cd9154929cfee2c1d313a660aa8",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300b0c0d0e0f101112131415164df6d0267ab919c544b7712685c6cd093b380e0baa4acaddea73dcacd89f7b55545a20c2",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300c0d0e0f1011121314151617092519d484dfc09fe1c9d8bad6ccc9d3ef3f95981dd38a6a802330d6fc9bfe3cf2212f72",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300d0e0f101112131415161718a91e6328da164ab46d56fa9be32fb55125124727f17aebca6ec5d721dbc37dbc23919b35",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300e0f10111213141516171819b43ec12d9eff7e7e14a87f08554fd22b0bdcaad40e21fcae913706b95b9047676dad23a3",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58300f101112131415161718191a862feaffc05853f50823d68cbac03dc79970408dd17f33521c4787f0e61d0084ffe9fb4e",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c5830101112131415161718191a1bcb6702a567fd6886b5496ca77f6f48bf4f2db6cd1d76259d135aa3a21c9b4d8154b04d74",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58301112131415161718191a1b1cda654e55c6ecf4f8c8c8dbc97a08df697e75a6ece49b65e8814dc17865306e0ad288b660",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c583012131415161718191a1b1c1d01cc9f984438606a0f3e1dedfb849fb9e99d11a69d1a1d0a72b45c5f1b57b4240224bed6",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c5830131415161718191a1b1c1d1e78f54d9b3ad97eadcdfec54f99f906d08c92f409c3eef9bab929fc8ccee054c9027f5b2b",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c58301415161718191a1b1c1d1e1f768c8e64cc258fa4e2c7d1b9243500d77effeb777103752bb2538d3b8e8f906de27acb09",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 90000,
+                    "note": "20 messages for Bob",
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f0102030405060708090a0b0ccba029e4e1a033596037dbdc15a6d7356263edaa2b37a3e5acb1314c6d7e3629f10a59",
+                            "ts": 1762000090
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f02030405060708090a0b0c0d46b17c8c9c34b3e072383fb130dae462eeb6043c5ecbe547259c503da0d0e676ad4860",
+                            "ts": 1762000090
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f030405060708090a0b0c0d0e29d9fa07228740de298899583ef0f87a0d949cc20298a68f13a4759363af3264608161",
+                            "ts": 1762000090
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f0405060708090a0b0c0d0e0ff244e59116835cf3de513378408d5a3f8a320acc6cc273cc2a2b23d63845c1e35c32f2",
+                            "ts": 1762000090
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f05060708090a0b0c0d0e0f10a4fef06db21367edfe7f35ff0f468e85e2d5dde2098a0c26cb74851929f59bf736a80e",
+                            "ts": 1762000090
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f060708090a0b0c0d0e0f1011c19a06c664f89c51d7f851a6d2ad02ac5b4f5dc430fef96545128e5cb6533186a01354",
+                            "ts": 1762000090
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f0708090a0b0c0d0e0f10111201f9c2ecc5b7264ebec823830c594bb929c93fb8bacf16cbb8e7c32f9c5169890a4e72",
+                            "ts": 1762000090
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f08090a0b0c0d0e0f10111213ddfdf5e48f152149a144d680dbac3b6275c0595b40f14d15f2df8752616f39b6d093f1",
+                            "ts": 1762000090
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f090a0b0c0d0e0f10111213143a270c819928a4941e28d82a191f5552e59bf4a6e2175260f0094d93d65d7107749d31",
+                            "ts": 1762000090
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde258300a0b0c0d0e0f101112131415ebd239b53a8a2be948084e6786a837d306a3160492c84d49d9e4275102d4e672ce758fa9",
+                            "ts": 1762000090
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde258300b0c0d0e0f101112131415164df6d0267a79d9058477b1e645c6cd093b380e0bfd79ab4d26ded23234678016a049a5c3",
+                            "ts": 1762000090
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde258300c0d0e0f1011121314151617092519d4841f005f2109187a16ccc9d3ef3f95984ae0ebfa4c8e3e481063057f0632aa73",
+                            "ts": 1762000090
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde258300d0e0f101112131415161718a91e6328dad68a74ad963a5b232fb55125124727a6498a5aa268d9bf373b86ffd7821e34",
+                            "ts": 1762000090
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde258300e0f10111213141516171819b43ec12d9e3fbebed468bfc8954fd22b0bdcaad459129d3e5d9a0827b768bc2499bea6a2",
+                            "ts": 1762000090
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde258300f101112131415161718191a862feaffc0989335c8e3164c7ac03dc79970408d864c52c2d0ea896e0ae5fbc70bfa7e4f",
+                            "ts": 1762000090
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde25830101112131415161718191a1bcb6702a5673da8467589ac67bf6f48bf4f2db6cd4a45440ddff7ad3cf063b6c2a0a3c875",
+                            "ts": 1762000090
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde258301112131415161718191a1b1cda654e55c62c343808081b09ba08df697e75a6ecb3a804784de0cfe689c89549269b3361",
+                            "ts": 1762000090
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2583012131415161718191a1b1c1d01cc9f9844f8a0aacffedd2d3b849fb9e99d11a6ca297c9abe1952c1f7af4f67f6373bd7",
+                            "ts": 1762000090
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde25830131415161718191a1b1c1d1e78f54d9b3a19be6d0d3e058f59f906d08c92f40994dd982a7584f2122218af8af66cde2a",
+                            "ts": 1762000090
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde258301415161718191a1b1c1d1e1f768c8e64cce54f6422071179e43500d77effeb77263014bb7efe83a562776b2e16694e08",
+                            "ts": 1762000090
+                        }
+                    ],
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 90000,
+                    "note": "Bob asks",
+                    "ask": {
+                        "packet": "414e01824fa300140148a2a2a2a2a2a2a2a2070040",
+                        "hops": 1,
+                        "snr": 5.0,
+                        "gateway": "gw-a",
+                        "jitterMs": 0,
+                        "patronKey": "434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 120000,
+                    "note": "offer",
+                    "send": [
+                        {
+                            "packet": "414e01825830a3001501485050505050505050045820d87a9cb8b89ec911ce8e7cc97cf61b6fc37936d237ee67f29956d8931130180640",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 121000,
+                    "note": "pickup: five",
+                    "pickup": "414e01825840a500160148a2a2a2a2a2a2a2a20248d87a9cb8b89ec911045820016fe972ee15bffc83ff35d19d3e149a4a515dc1515bf05c6b182928ae3cb9140a1a000777e45842949af65885ec92daad11b96c93878e5484e3e80f54f58b0d219ade47aefa874df87457a265aa8a9d3c80ddf8d89c45c36ddcc799219b904e675e1a50cda006752c07",
+                    "send": [
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f0102030405060708090a0b0ccba029e4e1a033596037dbdc15a6d7356263edaa2b37a3e5acb1314c6d7e3629f10a59",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f02030405060708090a0b0c0d46b17c8c9c34b3e072383fb130dae462eeb6043c5ecbe547259c503da0d0e676ad4860",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f030405060708090a0b0c0d0e29d9fa07228740de298899583ef0f87a0d949cc20298a68f13a4759363af3264608161",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f0405060708090a0b0c0d0e0ff244e59116835cf3de513378408d5a3f8a320acc6cc273cc2a2b23d63845c1e35c32f2",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f05060708090a0b0c0d0e0f10a4fef06db21367edfe7f35ff0f468e85e2d5dde2098a0c26cb74851929f59bf736a80e",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 151000,
+                    "note": "next reading: fifteen more",
+                    "serve": true,
+                    "send": [
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f060708090a0b0c0d0e0f1011c19a06c664f89c51d7f851a6d2ad02ac5b4f5dc430fef96545128e5cb6533186a01354",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f0708090a0b0c0d0e0f10111201f9c2ecc5b7264ebec823830c594bb929c93fb8bacf16cbb8e7c32f9c5169890a4e72",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f08090a0b0c0d0e0f10111213ddfdf5e48f152149a144d680dbac3b6275c0595b40f14d15f2df8752616f39b6d093f1",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2582f090a0b0c0d0e0f10111213143a270c819928a4941e28d82a191f5552e59bf4a6e2175260f0094d93d65d7107749d31",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde258300a0b0c0d0e0f101112131415ebd239b53a8a2be948084e6786a837d306a3160492c84d49d9e4275102d4e672ce758fa9",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde258300b0c0d0e0f101112131415164df6d0267a79d9058477b1e645c6cd093b380e0bfd79ab4d26ded23234678016a049a5c3",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde258300c0d0e0f1011121314151617092519d4841f005f2109187a16ccc9d3ef3f95984ae0ebfa4c8e3e481063057f0632aa73",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde258300d0e0f101112131415161718a91e6328dad68a74ad963a5b232fb55125124727a6498a5aa268d9bf373b86ffd7821e34",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde258300e0f10111213141516171819b43ec12d9e3fbebed468bfc8954fd22b0bdcaad459129d3e5d9a0827b768bc2499bea6a2",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde258300f101112131415161718191a862feaffc0989335c8e3164c7ac03dc79970408d864c52c2d0ea896e0ae5fbc70bfa7e4f",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde25830101112131415161718191a1bcb6702a5673da8467589ac67bf6f48bf4f2db6cd4a45440ddff7ad3cf063b6c2a0a3c875",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde258301112131415161718191a1b1cda654e55c62c343808081b09ba08df697e75a6ecb3a804784de0cfe689c89549269b3361",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde2583012131415161718191a1b1c1d01cc9f9844f8a0aacffedd2d3b849fb9e99d11a6ca297c9abe1952c1f7af4f67f6373bd7",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde25830131415161718191a1b1c1d1e78f54d9b3a19be6d0d3e058f59f906d08c92f40994dd982a7584f2122218af8af66cde2a",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006489c0ade1b0ee9dde258301415161718191a1b1c1d1e1f768c8e64cce54f6422071179e43500d77effeb77263014bb7efe83a562776b2e16694e08",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 180000,
+                    "note": "20 messages for Dora",
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed5582f0102030405060708090a0b0ccba029e4e1e0731920779b9c55a6d7356263ed4ad8ebc1d3de77263c6586585e8fffa1",
+                            "ts": 1762000180
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed5582f02030405060708090a0b0c0d46b17c8c9c74f3a032787ff170dae462eeb604dcad178771575a474da8288801d3bd98",
+                            "ts": 1762000180
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed5582f030405060708090a0b0c0d0e29d9fa0722c7009e69c8d9187ef0f87a0d949c22f144c4b9616262e36b575c131e7499",
+                            "ts": 1762000180
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed5582f0405060708090a0b0c0d0e0ff244e59116c31cb39e117338008d5a3f8a320a2c9f1e11fa58ed34a630bdaf9422c70a",
+                            "ts": 1762000180
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed5582f05060708090a0b0c0d0e0f10a4fef06db25327adbe3f75bf4f468e85e2d5dd02fa566e10b9b29269210df580485df6",
+                            "ts": 1762000180
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed5582f060708090a0b0c0d0e0f1011c19a06c664b8dc1197b811e692ad02ac5b4f5d24c3229b5337d4992cbeab5ff1dee6ac",
+                            "ts": 1762000180
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed5582f0708090a0b0c0d0e0f10111201f9c2ecc5f7660efe8863c34c594bb929c93f58491374fdca21d45f94a907fe74bb8a",
+                            "ts": 1762000180
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed5582f08090a0b0c0d0e0f10111213ddfdf5e48f556109e10496c09bac3b6275c059bbb32d2f2380199022699757c1ae6609",
+                            "ts": 1762000180
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed5582f090a0b0c0d0e0f10111213143a270c819968e4d45e68986a591f5552e59bf44611cb305682cf5ae3dea51f700a68c9",
+                            "ts": 1762000180
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed558300a0b0c0d0e0f101112131415ebd239b53aca6ba908480e27c6a837d306a31604723b912bef96e14672dc1e1cb90b7a51",
+                            "ts": 1762000180
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed558300b0c0d0e0f101112131415164df6d0267a399945c437f1a605c6cd093b380e0b1d8a772f10ac1425446f7878d737503b",
+                            "ts": 1762000180
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed558300c0d0e0f1011121314151617092519d4845f401f6149583a56ccc9d3ef3f9598aa1337987afcf85f606bfd11714c5f8b",
+                            "ts": 1762000180
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed558300d0e0f101112131415161718a91e6328da96ca34edd67a1b632fb5512512472746ba5638941a1fa847337e91a0fcebcc",
+                            "ts": 1762000180
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed558300e0f10111213141516171819b43ec12d9e7ffefe9428ff88d54fd22b0bdcaad4b9e1415c6be8ce30c760444aeec0535a",
+                            "ts": 1762000180
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed558300f101112131415161718191a862feaffc0d8d37588a3560c3ac03dc79970408d66bf8ea0e6984f797aed03a97c848bb7",
+                            "ts": 1762000180
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed55830101112131415161718191a1bcb6702a5677de80635c9ec27ff6f48bf4f2db6cdaab6986fe9856b2b806b4eacd7dd3d8d",
+                            "ts": 1762000180
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed558301112131415161718191a1b1cda654e55c66c747848485b49fa08df697e75a6ec535bd81a7b9209f1f9c06d2751e5c699",
+                            "ts": 1762000180
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed5583012131415161718191a1b1c1d01cc9f9844b8e0ea8fbe9d6d7b849fb9e99d11a62adaa0f8886b94d687a7b7098149ce2f",
+                            "ts": 1762000180
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed55830131415161718191a1b1c1d1e78f54d9b3a59fe2d4d7e45cf19f906d08c92f409742e444843f63405521057e481122bd2",
+                            "ts": 1762000180
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed558301415161718191a1b1c1d1e1f768c8e64cca50f2462475139a43500d77effeb77c6c3c8d9488c45b2127f93406117bbf0",
+                            "ts": 1762000180
+                        }
+                    ],
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 180000,
+                    "note": "Dora asks",
+                    "ask": {
+                        "packet": "414e01824fa300140148a3a3a3a3a3a3a3a3070040",
+                        "hops": 1,
+                        "snr": 5.0,
+                        "gateway": "gw-a",
+                        "jitterMs": 0,
+                        "patronKey": "464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 210000,
+                    "note": "offer",
+                    "send": [
+                        {
+                            "packet": "414e01825830a3001501485050505050505050045820143fdc5a07b572d2639d9d1406e1d2c5c6c4a0193b13023ec589478d00b1663b40",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 211000,
+                    "note": "pickup: five",
+                    "pickup": "414e01825840a500160148a3a3a3a3a3a3a3a30248143fdc5a07b572d2045820726ffda9ad119a1b28d57aeb7143313b493b3234b15835ba13327b5f96c0bc740a1a000777e45842b8b540d9f9b9236f3c4c311808dc847ef94bedc5e48f011e05ac607fcda4485df569b0b7b1fea2ecbfe0a99272c33b481cea4d016aaa5232fd721e3b92814ee00b4d",
+                    "send": [
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed5582f0102030405060708090a0b0ccba029e4e1e0731920779b9c55a6d7356263ed4ad8ebc1d3de77263c6586585e8fffa1",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed5582f02030405060708090a0b0c0d46b17c8c9c74f3a032787ff170dae462eeb604dcad178771575a474da8288801d3bd98",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed5582f030405060708090a0b0c0d0e29d9fa0722c7009e69c8d9187ef0f87a0d949c22f144c4b9616262e36b575c131e7499",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed5582f0405060708090a0b0c0d0e0ff244e59116c31cb39e117338008d5a3f8a320a2c9f1e11fa58ed34a630bdaf9422c70a",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed5582f05060708090a0b0c0d0e0f10a4fef06db25327adbe3f75bf4f468e85e2d5dd02fa566e10b9b29269210df580485df6",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 270000,
+                    "note": "messages for Emil",
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006483711105d2108ace4582f0102030405060708090a0b0ccba029e4e120b3d9e0b75b5c95a6d7356263ed97dc3543cbc58ebe8b3020041594adb2",
+                            "ts": 1762000270
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006483711105d2108ace4582f02030405060708090a0b0c0d46b17c8c9cb43360f2b8bf31b0dae462eeb60401a9c905694ca3dffafd8ed44ac8ef8b",
+                            "ts": 1762000270
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006483711105d2108ace4582f030405060708090a0b0c0d0e29d9fa072207c05ea90819d8bef0f87a0d949cfff59a46a17a9bfa543ef1005805268a",
+                            "ts": 1762000270
+                        }
+                    ],
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 270000,
+                    "note": "Emil asks",
+                    "ask": {
+                        "packet": "414e01824fa300140148a4a4a4a4a4a4a4a4070040",
+                        "hops": 1,
+                        "snr": 5.0,
+                        "gateway": "gw-a",
+                        "jitterMs": 0,
+                        "patronKey": "494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 300000,
+                    "note": "offer: fifteen packets left in the budget",
+                    "send": [
+                        {
+                            "packet": "414e01825830a3001501485050505050505050045820caae36d455ee87b8f2cee7e395d8504d589c0972a9121c428bd42b949d19643240",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 300500,
+                    "note": "next reading: fifteen more for Dora, the budget is used up",
+                    "serve": true,
+                    "send": [
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed5582f060708090a0b0c0d0e0f1011c19a06c664b8dc1197b811e692ad02ac5b4f5d24c3229b5337d4992cbeab5ff1dee6ac",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed5582f0708090a0b0c0d0e0f10111201f9c2ecc5f7660efe8863c34c594bb929c93f58491374fdca21d45f94a907fe74bb8a",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed5582f08090a0b0c0d0e0f10111213ddfdf5e48f556109e10496c09bac3b6275c059bbb32d2f2380199022699757c1ae6609",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed5582f090a0b0c0d0e0f10111213143a270c819968e4d45e68986a591f5552e59bf44611cb305682cf5ae3dea51f700a68c9",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed558300a0b0c0d0e0f101112131415ebd239b53aca6ba908480e27c6a837d306a31604723b912bef96e14672dc1e1cb90b7a51",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed558300b0c0d0e0f101112131415164df6d0267a399945c437f1a605c6cd093b380e0b1d8a772f10ac1425446f7878d737503b",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed558300c0d0e0f1011121314151617092519d4845f401f6149583a56ccc9d3ef3f9598aa1337987afcf85f606bfd11714c5f8b",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed558300d0e0f101112131415161718a91e6328da96ca34edd67a1b632fb5512512472746ba5638941a1fa847337e91a0fcebcc",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed558300e0f10111213141516171819b43ec12d9e7ffefe9428ff88d54fd22b0bdcaad4b9e1415c6be8ce30c760444aeec0535a",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed558300f101112131415161718191a862feaffc0d8d37588a3560c3ac03dc79970408d66bf8ea0e6984f797aed03a97c848bb7",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed55830101112131415161718191a1bcb6702a5677de80635c9ec27ff6f48bf4f2db6cdaab6986fe9856b2b806b4eacd7dd3d8d",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed558301112131415161718191a1b1cda654e55c66c747848485b49fa08df697e75a6ec535bd81a7b9209f1f9c06d2751e5c699",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed5583012131415161718191a1b1c1d01cc9f9844b8e0ea8fbe9d6d7b849fb9e99d11a62adaa0f8886b94d687a7b7098149ce2f",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed55830131415161718191a1b1c1d1e78f54d9b3a59fe2d4d7e45cf19f906d08c92f409742e444843f63405521057e481122bd2",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006482595786ad7f5fed558301415161718191a1b1c1d1e1f768c8e64cca50f2462475139a43500d77effeb77c6c3c8d9488c45b2127f93406117bbf0",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 301000,
+                    "note": "pickup: budget full, all three held back",
+                    "pickup": "414e01825840a500160148a4a4a4a4a4a4a4a40248caae36d455ee87b8045820d6a2527c018dfce085a4a50ad66e0010dd3413be94cbb0a75233299a6afe18000a1a000777e4584235d7ada2b0b3f71b1386429894c01c08a217f56926222a4d9b24a94212df4759beed61919c2362719be3a458c0eeb63b3828d11d9cabc5b718a8722a44662592b761",
+                    "send": [],
+                    "limits": [
+                        "gateway",
+                        "gateway",
+                        "gateway"
+                    ]
+                },
+                {
+                    "t": 360000,
+                    "note": "Emil asks again",
+                    "ask": {
+                        "packet": "414e01824fa300140148a4a4a4a4a4a4a4a4070040",
+                        "hops": 1,
+                        "snr": 5.0,
+                        "gateway": "gw-a",
+                        "jitterMs": 0,
+                        "patronKey": "4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 390000,
+                    "note": "budget full: no offer",
+                    "send": [],
+                    "limits": [
+                        "gateway"
+                    ]
+                },
+                {
+                    "t": 450000,
+                    "note": "Emil asks again, heard by gateway b",
+                    "ask": {
+                        "packet": "414e01824fa300140148a4a4a4a4a4a4a4a4070040",
+                        "hops": 1,
+                        "snr": 5.0,
+                        "gateway": "gw-b",
+                        "jitterMs": 0,
+                        "patronKey": "4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 480000,
+                    "note": "offer through gateway b",
+                    "send": [
+                        {
+                            "packet": "414e01825830a3001501485050505050505050045820e832ca1dbe67b91f866a0d61836667756247c3ef0bfd85323a14f29b30e4271640",
+                            "hops": 1,
+                            "gateway": "gw-b"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 481000,
+                    "note": "pickup: gateway b has its own budget",
+                    "pickup": "414e01825840a500160148a4a4a4a4a4a4a4a40248e832ca1dbe67b91f0458205fef13fc76023a9ee6ded987b6aa93958cdc2097ef9fc845d5319c9ca100d35e0a1a000777e45842d6430ef4f5c3623b8845356fee79358def98f9ace40bf2486b45e45c8ca4dca5c050c1e9aef87a634d3e0e495a24343bdfd1ad6c90721d2109996efe7259383dd7af",
+                    "send": [
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006483711105d2108ace4582f0102030405060708090a0b0ccba029e4e120b3d9e0b75b5c95a6d7356263ed97dc3543cbc58ebe8b3020041594adb2",
+                            "hops": 1,
+                            "gateway": "gw-b"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006483711105d2108ace4582f02030405060708090a0b0c0d46b17c8c9cb43360f2b8bf31b0dae462eeb60401a9c905694ca3dffafd8ed44ac8ef8b",
+                            "hops": 1,
+                            "gateway": "gw-b"
+                        },
+                        {
+                            "packet": "414e01825819a4000101483333333333333333030006483711105d2108ace4582f030405060708090a0b0c0d0e29d9fa072207c05ea90819d8bef0f87a0d949cfff59a46a17a9bfa543ef1005805268a",
+                            "hops": 1,
+                            "gateway": "gw-b"
+                        }
+                    ],
+                    "limits": []
+                }
+            ]
+        },
+        {
+            "name": "bridge: nothing twice to the same asker in an hour",
+            "setting": "bridge",
+            "patronFrom": "5050505050505050",
+            "steps": [
+                {
+                    "t": 0,
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648e05a4fcb50b22fc4582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263ed7daadac95470208cdc5fa75e5e8493b6",
+                            "ts": 1761996400
+                        },
+                        {
+                            "packet": "414e01825819a40001014833333333333333330300064846210e7aa18f8933582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb6044b9756c1c3b6b3ecb8a4cd591c1a80ee",
+                            "ts": 1761992800
+                        }
+                    ],
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 0,
+                    "note": "Clara asks",
+                    "ask": {
+                        "packet": "414e01824fa300140148a1a1a1a1a1a1a1a1070040",
+                        "hops": 1,
+                        "snr": 5.0,
+                        "gateway": "gw-a",
+                        "jitterMs": 0,
+                        "patronKey": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 30000,
+                    "note": "offer",
+                    "send": [
+                        {
+                            "packet": "414e01825830a300150148505050505050505004582079a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a40",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 31000,
+                    "note": "pickup: both packets",
+                    "pickup": "414e01825840a500160148a1a1a1a1a1a1a1a1024879a631eede1bf9c90458203d41a359ccbb4064475bf7ea5f93928fb04d4753780af7d12e3e301736f786020a1a000777e458420b8886d738a992c05860c48a8ce37af02326b4b5aaf2aa9175d9dfccedc57ba9ced8ac569aea3c3cc366607dda94867ccbd45a37169c880b8cba807d25d2b9f2c22c",
+                    "send": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648e05a4fcb50b22fc4582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263ed7daadac95470208cdc5fa75e5e8493b6",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a40001014833333333333333330300064846210e7aa18f8933582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb6044b9756c1c3b6b3ecb8a4cd591c1a80ee",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 300000,
+                    "note": "Clara asks again, same since",
+                    "ask": {
+                        "packet": "414e01824fa300140148a1a1a1a1a1a1a1a1070040",
+                        "hops": 1,
+                        "snr": 5.0,
+                        "gateway": "gw-a",
+                        "jitterMs": 0,
+                        "patronKey": "434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 330000,
+                    "note": "offer",
+                    "send": [
+                        {
+                            "packet": "414e01825830a3001501485050505050505050045820d87a9cb8b89ec911ce8e7cc97cf61b6fc37936d237ee67f29956d8931130180640",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 331000,
+                    "note": "pickup with a new one-time key: nothing again",
+                    "pickup": "414e01825840a500160148a1a1a1a1a1a1a1a10248d87a9cb8b89ec91104582043f276c4881efa6f7e1118aa7a59b1ebb1bf750c3206325109cb0f74c6a83f080a1a000777e45842f2b85aa622168f3f9f8d40bfbe8919dd2f1e52279fc078b70aa46da20960fb89d3d6684ad460302c273c67fca2ce749e1ddd25084f8ce26b9490283c4f5d025b07cf",
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 600000,
+                    "note": "a new message for Clara: once, though two patronages wait for it",
+                    "inbox": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f030405060708090a0b0c0d0e29d9fa072247801ee9485998fef0f87a0d949c9531f93643beaaeb7f9b547190730460",
+                            "ts": 1762000600
+                        }
+                    ],
+                    "serve": true,
+                    "send": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f030405060708090a0b0c0d0e29d9fa072247801ee9485998fef0f87a0d949c9531f93643beaaeb7f9b547190730460",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 4200001,
+                    "note": "Clara asks again more than an hour later",
+                    "ask": {
+                        "packet": "414e01824fa300140148a1a1a1a1a1a1a1a1070040",
+                        "hops": 1,
+                        "snr": 5.0,
+                        "gateway": "gw-a",
+                        "jitterMs": 0,
+                        "patronKey": "464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465"
+                    },
+                    "send": [],
+                    "limits": []
+                },
+                {
+                    "t": 4230001,
+                    "note": "offer",
+                    "send": [
+                        {
+                            "packet": "414e01825830a3001501485050505050505050045820143fdc5a07b572d2639d9d1406e1d2c5c6c4a0193b13023ec589478d00b1663b40",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                },
+                {
+                    "t": 4231001,
+                    "note": "pickup: all three again",
+                    "pickup": "414e01825840a500160148a1a1a1a1a1a1a1a10248143fdc5a07b572d20458206c1ab7a99d35f766053628b1159a8d454c13a9806f7f2767077189ac326588080a1a000777e458423a51d42564e48eba8abbcebc25c364e10a41f0ab72974f987572d3debdf6e1647b0afb0c2b9f0a849aa04c8d69c909d32c0e0a60570872e2ca73b3b0eaea79b50dfd",
+                    "send": [
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648cf2ec10496bb753c582f030405060708090a0b0c0d0e29d9fa072247801ee9485998fef0f87a0d949c9531f93643beaaeb7f9b547190730460",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a400010148333333333333333303000648e05a4fcb50b22fc4582f0102030405060708090a0b0ccba029e4e160f399a0f71b1cd5a6d7356263ed7daadac95470208cdc5fa75e5e8493b6",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        },
+                        {
+                            "packet": "414e01825819a40001014833333333333333330300064846210e7aa18f8933582f02030405060708090a0b0c0d46b17c8c9cf47320b2f8ff71f0dae462eeb6044b9756c1c3b6b3ecb8a4cd591c1a80ee",
+                            "hops": 1,
+                            "gateway": "gw-a"
+                        }
+                    ],
+                    "limits": []
+                }
+            ]
+        }
+    ]
+}

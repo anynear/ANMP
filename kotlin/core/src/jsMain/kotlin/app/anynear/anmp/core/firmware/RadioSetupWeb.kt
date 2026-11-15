@@ -211,7 +211,7 @@ object RadioSetupWeb {
     )
 }
 
-private class WebLine(private val web: WebSerialLine) : SerialLine {
+internal class WebLine(private val web: WebSerialLine) : SerialLine {
     override suspend fun write(bytes: ByteArray) = web.write(bytes).await()
 
     override suspend fun read(timeoutMs: Int): ByteArray = asByteArray(web.read(timeoutMs).await())

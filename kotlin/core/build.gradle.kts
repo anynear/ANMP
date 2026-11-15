@@ -83,6 +83,8 @@ kotlin {
             api(libs.coroutines.core)
             implementation(libs.serialization.json)
             implementation(libs.serialization.cbor)
+            // Settings of a radio over its serial line (ADR 0095, browser): Meshtastic's own messages, no protocol of our own.
+            api(libs.meshtastic.protobufs)
         }
         commonTest.dependencies {
             implementation(kotlin("test"))
@@ -96,14 +98,18 @@ tasks.withType<org.jetbrains.kotlin.gradle.targets.js.ir.KotlinJsIrLink>().confi
     compilerOptions.freeCompilerArgs.add("-Xes-long-as-bigint")
 }
 
-// Radio list vectors (vectors/anmp-v1-radio-list.json): UPDATE_VECTORS=1 ./gradlew :core:jvmTest rewrites the file.
+// Radio list vectors (vectors/anmp-v1-radio-list.json) and radio flow vectors (vectors/anmp-v1-radio-flows.json):
+// UPDATE_VECTORS=1 ./gradlew :core:jvmTest rewrites both files.
 val radioListVectors = rootProject.layout.projectDirectory.file("../vectors/anmp-v1-radio-list.json")
+val radioFlowVectors = rootProject.layout.projectDirectory.file("../vectors/anmp-v1-radio-flows.json")
 
 tasks.named<Test>("jvmTest") {
     val update = providers.environmentVariable("UPDATE_VECTORS").orElse("")
     inputs.property("updateVectors", update)
     inputs.files(radioListVectors).optional()
+    inputs.files(radioFlowVectors).optional()
     systemProperty("anmp.radioListVectors", radioListVectors.asFile.absolutePath)
+    systemProperty("anmp.radioFlowVectors", radioFlowVectors.asFile.absolutePath)
     systemProperty("anmp.updateVectors", update.get())
     environment("ANDP_GO_DIR", andpGoDir.asFile.absolutePath)
     environment("ANMP_REQUIRE_GO", providers.environmentVariable("ANMP_REQUIRE_GO").orElse("").get())

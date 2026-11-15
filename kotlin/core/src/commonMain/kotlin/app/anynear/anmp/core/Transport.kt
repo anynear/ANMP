@@ -88,6 +88,11 @@ internal class Transport(
     private val access: suspend (space: String) -> SpaceAccess?,
     private val ownWatchId: () -> String,
     private val events: suspend (CoreEvent) -> Unit,
+    /**
+     * Every holder refused a message entry for [space] with 403 (no right, revoked grant): the owner of that mailbox
+     * most likely took the grant back, e.g. after deleting everything (ADR 0046).
+     */
+    private val denied: suspend (space: String) -> Unit = {},
 ) {
     private val lock = Mutex()
     private val running = mutableSetOf<String>()
@@ -225,6 +230,7 @@ internal class Transport(
         val bytes = platform.blobs.read(blobName(job.id, obj.id)) ?: return obj.done.isNotEmpty()
         val done = obj.done.toMutableSet()
         val refused = mutableSetOf<String>()
+        val forbidden = mutableSetOf<String>()
         val key = if (obj.entry) job.space else obj.id
         val space = obj.space ?: job.space
         var tries = obj.tries
@@ -254,6 +260,10 @@ internal class Transport(
                                 onStored(n)
                             }
                             PutOutcome.REFUSED -> lock.withLock { refused += relay.node.toString() }
+                            PutOutcome.FORBIDDEN -> lock.withLock {
+                                refused += relay.node.toString()
+                                forbidden += relay.node.toString()
+                            }
                             PutOutcome.RETRY -> Unit
                         }
                     }
@@ -262,10 +272,16 @@ internal class Transport(
             if (net.holders(key).all { it.node.toString() in done || it.node.toString() in refused }) break
             waitAfterFailure()
         }
+        // A message entry no holder took, every one with 403: tell the core whose mailbox refuses us.
+        if (done.isEmpty() && obj.entry && job.ref.isNotEmpty() && forbidden.isNotEmpty() && forbidden == refused &&
+            net.holders(key).all { it.node.toString() in forbidden }
+        ) {
+            denied(job.space)
+        }
         return done.isNotEmpty()
     }
 
-    private enum class PutOutcome { OK, REFUSED, RETRY }
+    private enum class PutOutcome { OK, REFUSED, FORBIDDEN, RETRY }
 
     private suspend fun put(relay: Relay, a: SpaceAccess, space: String, obj: PendingObject, bytes: ByteArray, notify: Boolean, alarm: Boolean): PutOutcome {
         val client = pool.client(relay) ?: return PutOutcome.REFUSED
@@ -285,7 +301,7 @@ internal class Transport(
             pool.ok(relay.node)
             if (permanent(e.status)) {
                 platform.log.log("put $space/${obj.id.take(8)} at ${relay.site}: refused ${e.status}")
-                PutOutcome.REFUSED
+                if (e.status == 403) PutOutcome.FORBIDDEN else PutOutcome.REFUSED
             } else {
                 PutOutcome.RETRY
             }

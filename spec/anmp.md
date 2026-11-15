@@ -125,6 +125,7 @@ All fields are optional; which are set depends on the kind.
 | 34 | link | link | preview of the first web link in field 2, made by the sender (ADR 0069) | no |
 | 35 | alive | alive | sign of life (kind alive, ADR 0083 §5) | yes |
 | 36 | care | care | answer of a helper to a sign of life (kind care, ADR 0083 §4) | yes |
+| 37 | author | bstr 16 | device ID of the original sender in an own copy of a received direct, react or delete (ADR 0107) | no |
 
 Structures (see CDDL for types):
 
@@ -271,7 +272,8 @@ radio and never wakes.
 
 - **Key:** without `to` the circle key, with `to` the device pair key.
 - **AAD** = `anmp/v1/aad\n` ‖ scope ‖ `\n` ‖ h.
-- **Signature:** Ed25519 with the sender's device key over `anmp/v1/sig\n` ‖ scope ‖ `\n` ‖ CBOR([h, c])
+- **Signature:** Only where many hold the same key (circles, channels, alerts) and towards single devices; packets to
+  a person's mailbox recipient carry none (ADR 0107). Ed25519 with the sender's device key over `anmp/v1/sig\n` ‖ scope ‖ `\n` ‖ CBOR([h, c])
   (a 2-element array of the two byte strings). The plaintext is signed; the signature lies encrypted in `inner`.
 - **scope** is not in the packet: the circle ID in a circle, `""` for direct packets.
 
@@ -280,7 +282,8 @@ moving it to another recipient.
 
 | Path | Signature | Check on receipt |
 |---|---|---|
-| internet, all kinds | always | required. `signKey` (content 9) must give a device ID whose tag is `from` and, if present, equal to header 5; X25519 from content 8 and header 4 must be equal |
+| internet, to a person's mailbox recipient (ADR 0107) | never | none; the pair key of the sending device and the mailbox recipient proves the sender. `signKey` (content 9) must give the device ID of header 5, X25519 from content 8 and header 4 must be equal, and the sender's chain (content 25 or the one known) must list that device with exactly these two keys (for a member without chain: the pinned key) |
+| internet, all other kinds and recipients | always | required. `signKey` (content 9) must give a device ID whose tag is `from` and, if present, equal to header 5; X25519 from content 8 and header 4 must be equal |
 | radio, every circle kind (message, reaction, delete, alive, care) | always | required. Key from the member directory of this circle by the sender tag; a sender that is no member of the circle, a missing or a wrong signature makes the packet invalid |
 | radio, direct kinds (message, reaction, delete, read receipt, receipt) | never | none; the device pair key proves the sender |
 
@@ -298,8 +301,8 @@ before. Above the devices are two Ed25519 keys:
 signed      = [ body: bstr, sig: bstr(64) ]
 person-cert = { 0 root 32, 1 person 32, ? 2 n uint, ? 3 ts ms }
 device-list = { 0 root 32, ? 1 n uint, ? 2 seq uint, ? 3 ts ms, 4 inbox 32,
-                5 [+ device-entry], ? 6 [* device ID 16] }
-device-entry = { 0 signKey 32, 1 key 32 (X25519), ? 2 name tstr, ? 3 added ms, ? 4 node uint }
+                5 [+ device-entry], ? 6 [* device ID 16], ? 7 mailbox 32 }
+device-entry = { 0 signKey 32, 1 key 32 (X25519), ? 2 name tstr, ? 3 added ms, ? 4 node uint, ? 5 moved bool }
 proof       = { 0 signed(person-cert), 1 signed(device-list) }
 ```
 
@@ -307,7 +310,9 @@ proof       = { 0 signed(person-cert), 1 signed(device-list) }
   key (after theft) gets a higher `n`.
 - **Device list:** sig = Ed25519(person key of the certificate, `anmp/v1/devices\n` ‖ body). `root` and `n` must equal
   those of the certificate. `seq` grows with every change. `inbox` is the space of the person's one personal mailbox.
-  Field 6 lists revoked device IDs.
+  Field 6 lists revoked device IDs. Field 5 of a device entry (`moved`) says that this device moved its old mailbox
+  entries and own history to the person (ADR 0107 §6); new, added and recovered devices carry it from the start. Field 7 is the X25519 key of the person's mailbox recipient (ADR 0084, 0107); every
+  own device derives the same value from the mailbox owner seed, so merged lists stay equal.
 - **Person ID** = SHA-256(`anmp/v1/person\n` ‖ root public key)[0..16]; it stays across person key changes.
 - **Valid proof:** both signatures hold, `root` and `n` match, at least one and at most 16 devices, at most 256
   revoked IDs, no device twice, no device both listed and revoked, all keys 32 and all revoked IDs 16 bytes.
@@ -339,6 +344,23 @@ derived from that seed and an ID derived from the mailbox space (see [Key deriva
   `direct`) to the link device as before **and** a second packet with `to` = tag of the mailbox recipient, sealed with
   the pair key of its device and the mailbox ID. The second packet carries a write grant for the sender's mailbox for
   any grantee, like the link grant, because the sender does not know which device will answer.
+- **To the person (ADR 0107):** once a person's list names its mailbox recipient (field 7), a sender writes every
+  packet to that person (direct, react, delete, read, receipt, profile, want, have, rekey, removed and the channel
+  kinds) **once**, to the mailbox recipient, instead of once per device; own copies go once to the own mailbox
+  recipient with `peer`. Every device of the person opens them, also one added later or back from the emergency card.
+  A personal grant in such a packet names no grantee, like the link grant. Lists without field 7 are written to per
+  device as before.
+- **Own copies of received packets (ADR 0107 §4, §6):** an own device writes a direct, react or delete it received
+  into the own mailbox as an own copy to the own mailbox recipient, with `peer` (26) = the sender's person and `author`
+  (37) = the sender's device; the sender's keys, chain, grant and mailbox are left out, the own device vouches for it.
+  Readers take it as from `author`, if that device belongs to `peer` or is unknown. This happens (a) for packets heard
+  only over radio, 10 minutes after they came unless they came over the internet meanwhile, and (b) once when an
+  installation from before ADR 0107 starts: every direct, react and delete in the own mailbox sealed for this device is
+  written again this way (also own copies of sent ones, without `author`), then the old entry is deleted unless it
+  carries attachments younger than 30 days; entries sealed for own devices no longer listed are deleted. New
+  installations, added devices and devices back from the emergency card have nothing to move. (c) Once, the app hands its own
+  local direct history to the core (`keepOwnHistory`), which writes what is not in the mailbox yet as own copies: a
+  person with one device had no own copies of sent messages.
 - A device opens direct packets whose `to` is its own tag or the tag of its own mailbox recipient. Packets to the
   mailbox recipient always carry the sender keys (header 4 and 5); without them they are dropped.
 - Once the device list is known, the sender writes per device only. A device that opens both packets of one message
@@ -390,7 +412,7 @@ flowchart LR
 | circle space | Ed25519 private key = HKDF(circle secret, `anmp/v1/mailbox-sign`) (seed); space = b64u(public key) |
 | circle envelope key | HKDF(circle secret, `anmp/v1/env`), see [Envelope on ANDP](#envelope-on-andp) |
 | radio channel PSK | HKDF(UTF-8 `anynear`, `anmp/v1/radio-channel`); public (ADR 0051). There are no circle channels |
-| radio secret | device: HKDF(device ID, `anmp/v1/radio-secret`); circle: HKDF(circle secret, `anmp/v1/radio-secret`) |
+| radio secret | device: HKDF(device ID, `anmp/v1/radio-secret`); person (ADR 0107): the same with the mailbox recipient ID in place of the device ID; circle: HKDF(circle secret, `anmp/v1/radio-secret`) |
 | route tag | SHA-256(`anmp/v1/route-tag\n` ‖ f(hour) ‖ b(hour))[0..8], chains below (ADR 0051 §5a) |
 | forward chain | f(start of epoch) = HKDF(radio secret, `anmp/v1/route-fwd\n` ‖ epoch)[0..16]; f(h+1) = step(f(h)) |
 | backward chain | b(end of epoch) = HKDF(radio secret, `anmp/v1/route-back\n` ‖ epoch)[0..16]; b(h−1) = step(b(h)) |
@@ -597,6 +619,19 @@ deletes the older entries and a replaced picture content. A setting the device d
 own-data item with topic `anmp/profile` and no data; they merge again. The store secret reaches every own device and the
 state space, so the profile comes back with the emergency card.
 
+### Device space
+
+Settings of the app that apply to one own device (ADR 0106: radio, region, postponed notices and the like) lie like the
+profile space without expiry on the relays: owner = Ed25519 seed HKDF(store secret, `anmp/v1/devices-sign`), entries
+AES-256-GCM with HKDF(store secret, `anmp/v1/devices-aead`), AAD the same, each over
+`{0 device ID 16, 1 changed ms, 2 settings}` with `settings = {* tstr => {0 changed ms, 1 bytes}}` (names and bytes as
+the app gives them). Each device writes only its own entry, a few seconds after a change, and then deletes its older
+ones; the entry with the highest `changed` per device wins. A device that replaces another own device (after the
+emergency card or adding it, the person picks the device it replaces) takes that device's settings as its own, writes
+them under its own device ID and deletes the old device's entries. Entries of devices that are no longer in the own
+device list are deleted 90 days after their last change. After a person key change the entries move to the space of
+the new store secret like the profile.
+
 ### Emergency card and Kern-space
 
 - **Recovery code** R: 16 random bytes, written as 26 Crockford base32 characters (`0123456789ABCDEFGHJKMNPQRSTVWXYZ`,
@@ -763,7 +798,7 @@ from the network, only if a holder of the personal store answers (otherwise noth
 
 1. Lists the entries of the own mailbox and the contents they refer to.
 2. Removes the push watch, leaves every circle (`left`), leaves every channel (own ones: device address records
-   deleted, sender grants revoked; ADR 0062), forgets every contact (grants revoked) and signs a device list
+   deleted, sender grants revoked; ADR 0062), forgets every contact (grants revoked), revokes every other open grant (such as the one of the contact link) and signs a device list
    with only this device; the other own devices get their last chain (`sync`) and stop.
 3. Waits a short time for these writes, then deletes every file of the personal store, every entry of the password
    space and of the state space, and the mailbox objects from step 1 (owner delete, ANDP §5.5). The new `sync`
@@ -771,6 +806,11 @@ from the network, only if a holder of the personal store answers (otherwise noth
 
 Kept alerts (sealed on the device) and the channel cursors are deleted locally. The Kern-space of an emergency card stays (only the code reaches it), but with an empty state space recovery finds
 nothing. Packets others received and own objects in circle spaces stay there until they expire.
+
+Contacts are not told. They notice it by their next direct message: when every holder refuses the entry for the
+person's mailbox with 403 (revoked grant), the core marks the person as unreachable (`ContactUnreachable`) and keeps
+the mark until something of the person arrives again or the contact is removed (`ContactReachable`). A 403 can have
+other causes, so the mark is a hint, not proof.
 
 ### Radio inbox (ADR 0051)
 
@@ -899,9 +939,12 @@ current and the next hour.
 **Public form.** Every ANMP packet over radio carries the sender tag in field 1 and the route tag in field 6:
 
 - circle message and circle reaction: route tag of the circle radio secret, scope circle ID, circle key;
-- direct, direct reaction, read, receipt: route tag of the recipient device, scope `""`, device pair key.
+- direct, direct reaction, read, receipt: route tag of the recipient person's mailbox recipient and the pair key of
+  the sending device and that mailbox recipient (ADR 0107), scope `""`; for chains without a mailbox recipient
+  (device list field 7) route tag and pair key of the recipient device. Both are made the same way from an ID and an
+  X25519 key. Every device of the person takes it; a sender queues one entry per message and person.
 
-A receiver keeps a table per accepted hour: route tags of its own device and its circles; sender tags of every known
+A receiver keeps a table per accepted hour: route tags of its own device, its own person and its circles; sender tags of every known
 device (members, contacts). A packet whose route tag is not in the table is not for this app (but may be uplinked).
 The sender is found by its sender tag; signature and key choice then work as before. Duplicates are recognized by
 (sender installation, message ID) as on every path.
@@ -913,7 +956,8 @@ contact). It carries no tags. Any app with radio and internet that hears it may 
 
 **Pickup** (ADR 0051 §5a). The asker answers the first `patron` it hears with one or more `pickup` packets, sealed with
 AES-256-GCM under HKDF(X25519(asker one-time key, patron one-time key), `anmp/v1/pickup`), scope `anmp/v1/pickup`. The
-content is the CBOR array of windows `[epoch, f, b]`, at most 3 per packet, for its own device and its circles. For a
+content is the CBOR array of windows `[epoch, f, b]`, at most 3 per packet, for its own person, its own device and its
+circles. For a
 pickup up to hour H, a window of epoch e covers the hours from max(H − 719, start of e) to min(H, end of e); f is the
 forward chain value of the first, b the backward chain value of the last of these hours. One target needs one window,
 or two when the 30 days cross an epoch border. From f and b the patron computes the route tags of exactly these hours

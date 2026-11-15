@@ -79,9 +79,10 @@ internal class World(val net: FakeNet, val scope: CoroutineScope) {
         secrets: MemorySecretStore = MemorySecretStore(),
         config: AnmpCoreConfig = net.config(timings),
         clock: CoreClock = CoreClock.SYSTEM,
+        /** Given ones keep the state of an earlier start of the same installation (an app update). */
+        store: MemoryKeyValueStore = MemoryKeyValueStore(),
+        blobs: MemoryBlobStore = MemoryBlobStore(),
     ): Device {
-        val store = MemoryKeyValueStore()
-        val blobs = MemoryBlobStore()
         val host = TestHost()
         val core = AnmpCore(scope, config, AnmpPlatform(secrets, store, blobs, clock = clock, connector = net.connector, log = CoreLog { }), host)
         val d = Device(name, core, secrets, store, blobs, host)

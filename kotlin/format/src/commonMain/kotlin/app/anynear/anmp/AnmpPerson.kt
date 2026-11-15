@@ -27,6 +27,11 @@ class AnmpDeviceEntry(
     @CborLabel(2) val name: String? = null,
     @CborLabel(3) val added: Long = 0,
     @CborLabel(4) val node: Long? = null,
+    /**
+     * The device has moved its mailbox entries and its own direct history to the form to the person (ADR 0107 §6);
+     * once no listed device lacks it, the move code can go.
+     */
+    @CborLabel(5) val moved: Boolean = false,
 )
 
 /**
@@ -43,6 +48,11 @@ class AnmpDeviceList(
     @CborLabel(4) val inbox: ByteArray,
     @CborLabel(5) val devices: List<AnmpDeviceEntry>,
     @CborLabel(6) val revoked: List<ByteArray> = emptyList(),
+    /**
+     * X25519 key of the person's mailbox recipient (ADR 0084), 32 bytes: everything to the person is sealed for it
+     * (ADR 0107). Every own device derives the same key from the mailbox owner seed.
+     */
+    @CborLabel(7) val mailbox: ByteArray? = null,
 )
 
 /** State of a person's key chain named in a packet: certificate number [n] and list [seq]. */
@@ -252,7 +262,7 @@ object AnmpPersons {
         val s = signed(signed) ?: return null
         val list = runCatching { Anmp.cbor.decodeFromByteArray(AnmpDeviceList.serializer(), s.body) }.getOrNull() ?: return null
         if (!list.root.contentEquals(cert.root) || list.n != cert.n || list.seq < 0) return null
-        if (list.inbox.size != Anmp.KEY_BYTES || list.devices.isEmpty() || list.devices.size > MAX_DEVICES || list.revoked.size > MAX_REVOKED) return null
+        if (list.inbox.size != Anmp.KEY_BYTES || (list.mailbox != null && list.mailbox.size != Anmp.KEY_BYTES) || list.devices.isEmpty() || list.devices.size > MAX_DEVICES || list.revoked.size > MAX_REVOKED) return null
         if (list.devices.any { it.signKey.size != Anmp.KEY_BYTES || it.key.size != Anmp.KEY_BYTES }) return null
         if (list.revoked.any { it.size != Anmp.DEVICE_BYTES }) return null
         return list.takeIf { AnmpCrypto.edVerify(cert.person, signingBytes(AnmpInfo.DEVICES, s.body), s.sig) }

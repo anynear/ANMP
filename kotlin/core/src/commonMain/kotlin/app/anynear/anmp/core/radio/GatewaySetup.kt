@@ -8,7 +8,8 @@ import org.meshtastic.proto.ModuleConfig
 
 /**
  * Every radio on Wi-Fi is a gateway of the radio bridge (ADR 0054 §5b, ADR 0094 §3): it uploads what it hears on
- * channel 0 and on `anynear` to the anynear MQTT server. Address and login come from the signed radio list
+ * the default channel ([DefaultChannel], „channel 0“, on whatever slot) and on `anynear` to the anynear MQTT server,
+ * and nothing else. Address and login come from the signed radio list
  * ([RadioGateway]); without them, or on Bluetooth, the radio is no gateway. Not part of the radio profile (ADR 0006):
  * the app keeps these values in line silently on every connection, without a question.
  */
@@ -53,8 +54,8 @@ object GatewaySetup {
             // Only switch off what is ours; an MQTT setting of someone else stays as it is.
             if (current == null || !current.enabled || !isOwn(current.address)) return emptyList()
             return buildList {
-                gatewayChannels(snapshot.channels).filter { it.settings?.uplink_enabled == true || it.settings?.downlink_enabled == true }
-                    .forEach { add(Step.Uplink(withUplink(it, on = false))) }
+                // Every channel: a private one may have been switched on wrongly by an earlier app version.
+                snapshot.channels.filter(::mqttOn).forEach { add(Step.Uplink(withUplink(it, on = false))) }
                 add(Step.Mqtt(current.newBuilder().also { it.enabled = false }.build()))
             }
         }
@@ -62,8 +63,13 @@ object GatewaySetup {
         val deviations = RadioProfile.deviations(snapshot, target)
         if (deviations.any { it in RadioProfile.LORA_PARTS }) return emptyList()
         return buildList {
-            gatewayChannels(snapshot.channels).filter { it.settings?.uplink_enabled != true || it.settings?.downlink_enabled == true }
-                .forEach { add(Step.Uplink(withUplink(it, on = true))) }
+            val ours = gatewayChannels(snapshot.channels, snapshot.lora).map { it.index }.toSet()
+            snapshot.channels.filter { it.role != Channel.Role.DISABLED }.forEach {
+                val own = it.index in ours
+                // Ours: uplink on, downlink off. Any other channel (private, of another app) never goes to our server.
+                if (own && (it.settings?.uplink_enabled != true || it.settings?.downlink_enabled == true)) add(Step.Uplink(withUplink(it, on = true)))
+                if (!own && mqttOn(it)) add(Step.Uplink(withUplink(it, on = false)))
+            }
             if (ProfileDeviation.MQTT in deviations) add(Step.LoraMqtt(RadioProfile.mqtt(snapshot.lora)))
             val target = mqtt(current, gateway)
             if (!matches(current, target)) add(Step.Mqtt(target))
@@ -92,10 +98,19 @@ object GatewaySetup {
             current.json_enabled == target.json_enabled && current.map_reporting_enabled == target.map_reporting_enabled &&
             current.proxy_to_client_enabled == target.proxy_to_client_enabled
 
-    /** Channel 0 (primary) and the radio channel `anynear`: the channels the anynear MQTT server takes. */
-    fun gatewayChannels(channels: List<Channel>): List<Channel> = channels.filter {
-        it.role == Channel.Role.PRIMARY || (it.role == Channel.Role.SECONDARY && it.settings?.name == AnmpInfo.RADIO_CHANNEL_NAME)
+    /**
+     * The default channel ([DefaultChannel], „channel 0“, on whatever slot) and the radio channel `anynear`: the
+     * channels the anynear MQTT server takes. A private primary channel is not among them.
+     */
+    fun gatewayChannels(channels: List<Channel>, lora: Config.LoRaConfig?): List<Channel> {
+        val default = DefaultChannel.index(channels, lora)
+        return channels.filter {
+            it.index == default || (it.role == Channel.Role.SECONDARY && it.settings?.name == AnmpInfo.RADIO_CHANNEL_NAME)
+        }
     }
+
+    private fun mqttOn(channel: Channel): Boolean =
+        channel.settings?.uplink_enabled == true || channel.settings?.downlink_enabled == true
 
     private fun withUplink(channel: Channel, on: Boolean): Channel {
         val settings = channel.settings ?: org.meshtastic.proto.ChannelSettings.Builder().build()

@@ -2259,7 +2259,8 @@ class AnmpCore(
         opened.await()
         val id = randomId()
         val c = CircleState(id = id, name = name.trim().take(AnmpLinks.MAX_NAME), secret = B64.encode(AnmpKeys.randomKey()), joinedAt = now())
-        update { s -> s.copy(circles = s.circles + c) }
+        // A new circle has no history to load (ADR 0107 §8): read through from the start, so no loading notice.
+        update { s -> s.copy(circles = s.circles + c, circlesRead = s.circlesRead + id) }
         emit(CoreEvent.CircleUpdated(c))
         return@onCore c
     }

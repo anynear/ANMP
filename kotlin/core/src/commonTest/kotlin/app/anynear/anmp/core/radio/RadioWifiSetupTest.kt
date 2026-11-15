@@ -31,7 +31,7 @@ class RadioWifiSetupTest {
         val modules = mutableMapOf<String, ModuleConfig>()
         val configs = mutableMapOf<String, Config>()
         var channels = listOf(
-            Channel.Builder().also { it.index = 0; it.role = Channel.Role.PRIMARY; it.settings = ChannelSettings.Builder().build() }.build(),
+            Channel.Builder().also { it.index = 0; it.role = Channel.Role.PRIMARY; it.settings = ChannelSettings.Builder().also { s -> s.psk = DefaultChannel.PSK }.build() }.build(),
             Channel.Builder().also {
                 it.index = 1
                 it.role = Channel.Role.SECONDARY

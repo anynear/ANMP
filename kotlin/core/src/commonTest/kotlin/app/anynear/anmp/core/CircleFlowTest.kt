@@ -5,6 +5,7 @@ import app.anynear.andp.Key
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -101,6 +102,8 @@ class CircleFlowTest {
         val a = device("Anna")
         val b = device("Ben")
         val circle = a.core.createCircle("Familie")
+        // A circle founded here has nothing to load: no loading notice from the start.
+        assertFalse(circle.id in a.core.loading.value.circles)
         b.core.joinCircle(a.core.inviteLink(circle.id)!!)
         a.await<CoreEvent.MemberUpdated> { it.member.deviceId == b.deviceId }
         eventually { a.core.canWriteTo(b.deviceId) }

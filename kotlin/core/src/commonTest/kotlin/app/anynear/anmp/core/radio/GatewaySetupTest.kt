@@ -9,9 +9,12 @@ import org.meshtastic.proto.ChannelSettings
 import org.meshtastic.proto.Config
 import org.meshtastic.proto.ModuleConfig
 import org.meshtastic.proto.User
+import okio.ByteString
+import okio.ByteString.Companion.toByteString
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** Every radio on Wi-Fi is a gateway (ADR 0054 §5b); [GatewaySetup.plan] says what to write and in which order. */
@@ -43,6 +46,68 @@ class GatewaySetupTest {
     fun foreignChannelsGetNoUplink() {
         val steps = GatewaySetup.plan(snapshot(wifi = true, extra = listOf(channel(2, "Mesh Hessen", Channel.Role.SECONDARY))), gateway)
         assertEquals(listOf("uplink 0", "uplink 1", "mqtt"), steps.map(::label))
+    }
+
+    /** Slot 0 private (own key), the default channel on slot 1: only slot 1 and `anynear` go up (tablet test 15.11.2026). */
+    @Test
+    fun privatePrimaryIsNeverUploaded() {
+        val channels = listOf(
+            channel(0, "k3vin", Channel.Role.PRIMARY, psk = PRIVATE),
+            channel(1, "", Channel.Role.SECONDARY),
+            channel(3, AnmpInfo.RADIO_CHANNEL_NAME, Channel.Role.SECONDARY, psk = PRIVATE),
+        )
+        val steps = GatewaySetup.plan(snapshot(wifi = true, channels = channels), gateway)
+        assertEquals(listOf("uplink 1", "uplink 3", "mqtt"), steps.map(::label))
+        assertEquals(listOf(1, 3), GatewaySetup.gatewayChannels(channels, RadioProfile.lora(null)).map { it.index })
+    }
+
+    /** An uplink an earlier version set on the private slot 0 is switched off again, the rest stays as it is. */
+    @Test
+    fun wrongUplinkOnPrivateChannelGoesOff() {
+        val channels = listOf(
+            channel(0, "k3vin", Channel.Role.PRIMARY, uplink = true, psk = PRIVATE),
+            channel(1, "", Channel.Role.SECONDARY),
+            channel(3, AnmpInfo.RADIO_CHANNEL_NAME, Channel.Role.SECONDARY, uplink = true, psk = PRIVATE),
+        )
+        val steps = GatewaySetup.plan(snapshot(wifi = true, channels = channels, mqtt = GatewaySetup.mqtt(null, gateway)), gateway)
+        assertEquals(listOf("uplink 0", "uplink 1"), steps.map(::label))
+        val (off, on) = steps.map { assertIs<Step.Uplink>(it).channel.settings!! }
+        assertEquals(false, off.uplink_enabled)
+        assertEquals(false, off.downlink_enabled)
+        assertEquals(PRIVATE, off.psk, "the rest of the channel stays")
+        assertEquals("k3vin", off.name)
+        assertEquals(true, on.uplink_enabled)
+    }
+
+    /** Leaving the gateway role switches the uplink off on every channel, also on one set wrongly before. */
+    @Test
+    fun backOnBluetoothSwitchesWrongUplinkOffToo() {
+        val channels = listOf(
+            channel(0, "k3vin", Channel.Role.PRIMARY, uplink = true, psk = PRIVATE),
+            channel(1, "", Channel.Role.SECONDARY, uplink = true),
+        )
+        val steps = GatewaySetup.plan(snapshot(wifi = false, channels = channels, mqtt = GatewaySetup.mqtt(null, gateway)), gateway)
+        assertEquals(listOf("uplink 0", "uplink 1", "mqtt"), steps.map(::label))
+    }
+
+    @Test
+    fun defaultChannelLikeTheFirmware() {
+        val shortSlow = RadioProfile.lora(null)
+        assertTrue(DefaultChannel.isDefault(channel(0, "", Channel.Role.PRIMARY), shortSlow))
+        assertTrue(DefaultChannel.isDefault(channel(2, "ShortSlow", Channel.Role.SECONDARY), shortSlow), "name of the preset")
+        assertTrue(DefaultChannel.isDefault(channel(2, "", Channel.Role.SECONDARY), null), "empty name without preset")
+        assertEquals(false, DefaultChannel.isDefault(channel(2, "ShortSlow", Channel.Role.SECONDARY), null))
+        assertEquals(false, DefaultChannel.isDefault(channel(2, "LongFast", Channel.Role.SECONDARY), shortSlow), "name of another preset")
+        assertEquals(false, DefaultChannel.isDefault(channel(0, "k3vin", Channel.Role.PRIMARY), shortSlow), "own name")
+        assertEquals(false, DefaultChannel.isDefault(channel(0, "", Channel.Role.PRIMARY, psk = PRIVATE), shortSlow), "own key")
+        assertEquals(false, DefaultChannel.isDefault(channel(0, "", Channel.Role.PRIMARY, psk = ByteString.EMPTY), shortSlow), "unencrypted")
+        assertEquals(false, DefaultChannel.isDefault(channel(2, "", Channel.Role.DISABLED), shortSlow))
+        val custom = shortSlow.newBuilder().also { it.use_preset = false }.build()
+        assertTrue(DefaultChannel.isDefault(channel(0, "Custom", Channel.Role.PRIMARY), custom))
+        // Two default channels: the primary one counts.
+        assertEquals(4, DefaultChannel.index(listOf(channel(1, "", Channel.Role.SECONDARY), channel(4, "", Channel.Role.PRIMARY)), shortSlow))
+        assertEquals(1, DefaultChannel.index(listOf(channel(0, "k3vin", Channel.Role.PRIMARY, psk = PRIVATE), channel(1, "", Channel.Role.SECONDARY)), shortSlow))
+        assertNull(DefaultChannel.index(listOf(channel(0, "k3vin", Channel.Role.PRIMARY, psk = PRIVATE)), shortSlow))
     }
 
     @Test
@@ -135,6 +200,7 @@ class GatewaySetupTest {
         mqtt: ModuleConfig.MQTTConfig? = null,
         lora: Config.LoRaConfig = RadioProfile.lora(null),
         extra: List<Channel> = emptyList(),
+        channels: List<Channel>? = null,
     ) = DeviceConfigSnapshot(
         configs = listOf(
             Config.Builder().also { it.lora = lora }.build(),
@@ -145,19 +211,24 @@ class GatewaySetupTest {
             ModuleConfig.Builder().also { it.telemetry = RadioProfile.telemetry(null) }.build(),
             mqtt?.let { m -> ModuleConfig.Builder().also { it.mqtt = m }.build() },
         ),
-        channels = listOf(
+        channels = channels ?: (listOf(
             channel(0, "", Channel.Role.PRIMARY, uplink),
-            channel(1, AnmpInfo.RADIO_CHANNEL_NAME, Channel.Role.SECONDARY, uplink),
-        ) + extra,
+            channel(1, AnmpInfo.RADIO_CHANNEL_NAME, Channel.Role.SECONDARY, uplink, PRIVATE),
+        ) + extra),
         owner = User.Builder().also { it.long_name = "anynear.app | Fuchs 27" }.build(),
     )
 
-    private fun channel(index: Int, name: String, role: Channel.Role, uplink: Boolean = false) = Channel.Builder().also { c ->
+    private fun channel(index: Int, name: String, role: Channel.Role, uplink: Boolean = false, psk: ByteString = DefaultChannel.PSK) = Channel.Builder().also { c ->
         c.index = index
         c.role = role
         c.settings = ChannelSettings.Builder().also {
             it.name = name
+            it.psk = psk
             it.uplink_enabled = uplink
         }.build()
     }.build()
+
+    private companion object {
+        val PRIVATE: ByteString = ByteArray(32) { 7 }.toByteString()
+    }
 }

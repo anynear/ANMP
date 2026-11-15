@@ -7,12 +7,14 @@ import app.anynear.anmp.AnmpContent
 import app.anynear.anmp.AnmpDevice
 import app.anynear.anmp.AnmpHeader
 import app.anynear.anmp.AnmpKind
+import app.anynear.anmp.AnmpMailbox
 import app.anynear.anmp.AnmpRadio
 import app.anynear.anmp.AnmpVerifier
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -22,7 +24,28 @@ class RadioKeysTest {
 
     private suspend fun device(seed: Int) = AnmpDevice.of(ByteArray(32) { (seed + it).toByte() }, ByteArray(32) { (seed * 7 + it).toByte() })
 
-    private suspend fun keys(seed: Int, now: Long = 1_762_000_000L) = RadioKeys(device(seed)) { now }
+    private suspend fun mailbox(seed: Int) = AnmpMailbox.of(ByteArray(32) { (seed * 13 + it).toByte() })
+
+    private suspend fun keys(seed: Int, now: Long = 1_762_000_000L, person: Int = seed) = RadioKeys(device(seed), mailbox(person)) { now }
+
+    @Test
+    fun directPacketToThePersonReachesEachOfItsDevices() = runTest {
+        // ADR 0107: Ben sends to Anna's mailbox recipient; her phone (1) and tablet (2) both take and open it.
+        val ben = keys(5)
+        val bob = device(5)
+        val annasMailbox = mailbox(1)
+        val content = AnmpContent(id = ByteArray(Anmp.ID_BYTES) { 3 }, ts = 1, text = "Hallo")
+        val packet = ben.directPacket(AnmpKind.DIRECT, B64.encode(annasMailbox.id), B64.encode(annasMailbox.publicKey), content)
+        val route = assertNotNull(Anmp.peek(packet)?.route)
+        for (anna in listOf(keys(1, person = 1), keys(2, person = 1))) {
+            val table = anna.table(emptyList(), listOf(bob.deviceIdText), 1_762_000_000L)
+            assertEquals(RadioTarget.Person, table.target(route))
+            val opened = assertNotNull(anna.openDirect(packet, bob.deviceIdText, B64.encode(bob.publicKey), toPerson = true))
+            assertEquals("Hallo", opened.content.text)
+        }
+        // Someone else's person does not even see the route.
+        assertNull(keys(3).table(emptyList(), listOf(bob.deviceIdText), 1_762_000_000L).target(route))
+    }
 
     private fun circle(id: String, secret: String) = CircleState(id = id, name = "Familie", secret = secret)
 

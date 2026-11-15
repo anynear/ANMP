@@ -130,6 +130,12 @@ object AnmpInfo {
     /** Store secret → AES-256-GCM key of the profile space entry; also its associated data. */
     const val PROFILE_AEAD = "anmp/v1/profile-aead"
 
+    /** Store secret → Ed25519 seed of the device space: settings of each own device by device ID (ADR 0106). */
+    const val DEVICES_SIGN = "anmp/v1/devices-sign"
+
+    /** Store secret → AES-256-GCM key of the device space entries; also their associated data. */
+    const val DEVICES_AEAD = "anmp/v1/devices-aead"
+
     /** Signed bytes of an alert (ADR 0062), followed directly by the body bytes. */
     const val ALERT = "anmp/v1/alert"
 

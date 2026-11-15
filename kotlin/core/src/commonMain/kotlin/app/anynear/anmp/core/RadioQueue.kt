@@ -138,6 +138,9 @@ internal class RadioQueue(
         queue.mapNotNull(::blindDue).minOrNull()?.let(::wakeAt)
     }
 
+    /** `true` if an entry matching [predicate] waits. */
+    suspend fun has(predicate: (RadioQueued) -> Boolean): Boolean = lock.withLock { queue.any(predicate) }
+
     suspend fun add(entry: RadioQueued) {
         // Online the internet goes first: over radio only if no receipt came in time (ADR 0087).
         val wait = if (host.online()) timings.internetFirst.inWholeMilliseconds else 0L

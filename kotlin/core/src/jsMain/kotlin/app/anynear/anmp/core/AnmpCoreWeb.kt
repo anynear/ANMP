@@ -484,6 +484,25 @@ class AnmpCoreWeb private constructor(private val core: AnmpCore, private val ho
     /** Devices of the own person, this one included. */
     fun ownDevices(): Array<DeviceInfo> = core.ownDevices.value.toTypedArray()
 
+    /** The own mailbox was not read through once yet on this device (ADR 0107 §8): direct chats still load. */
+    fun loadingMailbox(): Boolean = core.loading.value.mailbox
+
+    /** Circles whose space was not read through once yet on this device (ADR 0107 §8). */
+    fun loadingCircles(): Array<String> = core.loading.value.circles.toTypedArray()
+
+    /** [listener] whenever [loadingMailbox] or [loadingCircles] change. */
+    fun onLoading(listener: () -> Unit) {
+        GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) { core.loading.drop(1).collect { listener() } }
+    }
+
+    /**
+     * Hands the page's own direct history to the core once (ADR 0107 §6, [AnmpCore.keepOwnHistory]); `true` once done,
+     * `false`: try again later.
+     */
+    fun keepOwnHistory(items: Array<WebHistoryItem>): Promise<Boolean> = GlobalScope.promise {
+        core.keepOwnHistory(items.map { it.toCore() })
+    }
+
     /**
      * Data for the own other devices (ADR 0042, [AnmpCore.sendOwnData]); they get it as [CoreEvent.OwnData]. [toDevice]
      * `null` = all own other devices. Resolves to `false` if there is none or this device was removed.
@@ -552,3 +571,42 @@ class AnmpCoreWeb private constructor(private val core: AnmpCore, private val ho
 /** Result of [AnmpCoreWeb.webUpdate]: [kind] `none`, `soon` or `required`; [from] Unix milliseconds or 0. */
 @JsExport
 data class WebUpdate(val kind: String, val from: Double)
+
+/** One direct message of the page's own history for [AnmpCoreWeb.keepOwnHistory] (ADR 0107 §6); IDs and keys b64u. */
+@JsExport
+class WebHistoryItem(
+    /** The other person (person ID, or a device ID of it). */
+    val peer: String,
+    val mid: String,
+    val ts: Double,
+    val text: String,
+    /** Sender's device of a received message; `null` for an own one. */
+    val author: String?,
+    val replyTo: String?,
+    val replyFrom: String?,
+    val attachments: Array<WebHistoryAttachment>,
+) {
+    internal fun toCore() = OwnHistoryItem(peer, mid, ts.toLong(), text, author, attachments.mapNotNull { it.toCore() }, replyTo, replyFrom)
+}
+
+/** Attachment of a [WebHistoryItem], as the page keeps it (ANMP field 11). */
+@JsExport
+class WebHistoryAttachment(
+    val id: String,
+    val key: String,
+    val type: String,
+    val name: String,
+    val size: Double,
+    val width: Int,
+    val height: Int,
+    val duration: Double,
+    val hash: String?,
+) {
+    internal fun toCore(): AnmpAttachment? = runCatching {
+        AnmpAttachment(
+            B64.decode(id), B64.decode(key), type, name.ifEmpty { null }, size.toLong(), width, height,
+            hash?.let(B64::decode), duration.toLong(),
+        )
+    }.getOrNull()
+}
+

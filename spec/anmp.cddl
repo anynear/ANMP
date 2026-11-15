@@ -103,6 +103,7 @@ content = {
   ? 34 => link,             ; preview of the first web link in field 2 (ADR 0069)
   ? 35 => alive,            ; sign of life (ADR 0083 §5); also over radio
   ? 36 => care,             ; answer of a helper (ADR 0083 §4); also over radio
+  ? 37 => bstr .size 16,    ; author: original sender device in an own copy of a received packet (ADR 0107)
   * int => any,             ; further fields, skipped by older readers
 }
 
@@ -175,9 +176,9 @@ store-title = { 0 => tstr, ? 1 => uint, ? 2 => uint }
 ;   Person ID = SHA-256("anmp/v1/person\n" || root public key)[0..16].
 signed       = [ body: bstr, sig: bstr .size 64 ]
 person-cert  = { 0 => bstr .size 32, 1 => bstr .size 32, ? 2 => uint, ? 3 => uint }   ; root, person, n, ts ms
-device-list  = { 0 => bstr .size 32, ? 1 => uint, ? 2 => uint, ? 3 => uint, 4 => space, 5 => [+ device-entry], ? 6 => [* device] }
-                                                         ; root, n, seq, ts ms, mailbox, devices, revoked
-device-entry = { 0 => bstr .size 32, 1 => bstr .size 32, ? 2 => tstr, ? 3 => uint, ? 4 => uint }   ; Ed25519, X25519, name, added ms, node
+device-list  = { 0 => bstr .size 32, ? 1 => uint, ? 2 => uint, ? 3 => uint, 4 => space, 5 => [+ device-entry], ? 6 => [* device], ? 7 => bstr .size 32 }
+                                                         ; root, n, seq, ts ms, mailbox, devices, revoked, mailbox recipient X25519 (ADR 0107)
+device-entry = { 0 => bstr .size 32, 1 => bstr .size 32, ? 2 => tstr, ? 3 => uint, ? 4 => uint, ? 5 => bool }   ; Ed25519, X25519, name, added ms, node, moved (ADR 0107)
 proof        = { 0 => bstr .cbor signed, 1 => bstr .cbor signed }   ; certificate, device list
 
 ; Snapshot for the own other devices (kind sync, ADR 0042): time ms, name, circles, contact devices, gone, channels.

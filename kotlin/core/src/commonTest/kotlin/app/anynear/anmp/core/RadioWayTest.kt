@@ -469,6 +469,55 @@ class RadioWayTest {
         assertEquals(2, a.all<CoreEvent.RadioSend>().count { it.mid == mid && it.state == RadioSendState.QUEUED })
     }
 
+    @Test
+    fun directMessageOverRadioReachesEveryDeviceOfThePersonOnce() = world {
+        // ADR 0107: to a person with a mailbox recipient one radio packet reaches phone and tablet.
+        val phone = device("Anna")
+        val tablet = addTablet(phone)
+        eventually { tablet.core.ownDevices.value.size == 2 }
+        val ben = device("Ben")
+        ben.core.addContact(phone.core.ownContactLink())
+        eventually { ben.core.membersOf(MemberState.CONTACTS).count { it.person == phone.info.personId } == 2 }
+        eventually { phone.core.membersOf(MemberState.CONTACTS).any { it.person == ben.info.personId } }
+        eventually { tablet.core.membersOf(MemberState.CONTACTS).any { it.person == ben.info.personId } }
+        val air = FakeAir()
+        val rb = air.radio(ben.name)
+        ben.start(rb, FakeRadioHost(online = false))
+        phone.radio(air)
+        tablet.radio(air)
+
+        // The app queues it once per device; the core sends one entry for the person.
+        val mid = newMid()
+        ben.core.queueRadioText(null, phone.deviceId, mid, 1_700_000_000_000, "Hallo Anna")
+        ben.core.queueRadioText(null, tablet.deviceId, mid, 1_700_000_000_000, "Hallo Anna")
+        phone.await<CoreEvent.RadioMessage>(30.seconds) { it.mid == mid && it.fromDevice == ben.deviceId }
+        tablet.await<CoreEvent.RadioMessage>(30.seconds) { it.mid == mid && it.fromDevice == ben.deviceId }
+        assertEquals(1, ben.all<CoreEvent.RadioSend>().count { it.mid == mid && it.state == RadioSendState.QUEUED })
+    }
+
+    @Test
+    fun directMessageHeardOnlyOverRadioReachesTheOtherOwnDevices() = world {
+        // ADR 0106 §6, 0107 §4: the phone heard it over radio; it writes an own copy, so the tablet gets it too.
+        val phone = device("Anna", TEST_TIMINGS.copy(radioCopyWait = 1.seconds))
+        val tablet = addTablet(phone)
+        eventually { tablet.core.ownDevices.value.size == 2 }
+        val ben = device("Ben")
+        ben.core.addContact(phone.core.ownContactLink())
+        eventually { ben.core.membersOf(MemberState.CONTACTS).count { it.person == phone.info.personId } == 2 }
+        eventually { phone.core.membersOf(MemberState.CONTACTS).any { it.person == ben.info.personId } }
+        eventually { tablet.core.membersOf(MemberState.CONTACTS).any { it.person == ben.info.personId } }
+        val air = FakeAir()
+        ben.start(air.radio(ben.name), FakeRadioHost(online = false))
+        phone.radio(air)
+
+        val mid = newMid()
+        ben.core.queueRadioText(null, phone.deviceId, mid, 1_700_000_000_000, "Nur Funk")
+        phone.await<CoreEvent.RadioMessage>(30.seconds) { it.mid == mid }
+        val copy = tablet.await<CoreEvent.Message>(30.seconds) { it.mid == mid }
+        assertEquals(ben.deviceId, copy.fromDevice)
+        assertEquals(Conversation.Direct(ben.info.personId), copy.conversation)
+    }
+
     private val retryTimings = RadioTimings(
         internetFirst = kotlin.time.Duration.ZERO,
         hopRetry = 200.milliseconds,

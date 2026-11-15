@@ -109,7 +109,7 @@ class MeshtasticdTest {
             console.write(
                 before,
                 listOf(
-                    RadioWrite.SetChannel(channel(0, Channel.Role.PRIMARY, "k3vin", private, uplink = true)),
+                    RadioWrite.SetChannel(channel(0, Channel.Role.PRIMARY, "home", private, uplink = true)),
                     RadioWrite.SetChannel(channel(1, Channel.Role.SECONDARY, "", DefaultChannel.PSK, uplink = false)),
                     RadioWrite.SetChannel(channel(3, Channel.Role.SECONDARY, app.anynear.anmp.AnmpInfo.RADIO_CHANNEL_NAME, okio.ByteString.of(*app.anynear.anmp.AnmpRadio.channelPsk()), uplink = false)),
                 ),
@@ -122,7 +122,7 @@ class MeshtasticdTest {
         val after = assertNotNull(console.read()).snapshot
         val bySlot = after.channels.associateBy { it.index }
         println("Kanäle: " + after.channels.filter { it.role != Channel.Role.DISABLED }.map { "${it.index} ${it.settings?.name} up=${it.settings?.uplink_enabled}" })
-        assertEquals("k3vin", bySlot[0]?.settings?.name)
+        assertEquals("home", bySlot[0]?.settings?.name)
         assertEquals(false, bySlot[0]?.settings?.uplink_enabled, "private slot 0 stays down")
         assertEquals(true, bySlot[1]?.settings?.uplink_enabled, "default channel on slot 1 goes up")
         assertEquals(1, DefaultChannel.index(after.channels, after.lora))

@@ -1,10 +1,11 @@
 // Package anmp implements the radio part of ANMP (anynear Message Protocol) version v1 as specified in
 // spec/anmp.md, as far as a bridge in a relay needs it: frame and header, open packets (ask, patron), sealed
 // packets and their size, the public form with hourly sender and route tags, pickup windows and chains, the radio
-// rule and budget, the PSK of the radio channel and the content of the radio list. It has no state.
+// rule and budget, the PSK of the radio channel, the content of the radio list and the patron role. Only the
+// patron role (Patron) holds state, as much as the role needs.
 //
 // Reference implementation: kotlin/format (package app.anynear.anmp). Both are checked against
-// vectors/anmp-v1.json and vectors/anmp-v1-radio-list.json.
+// vectors/anmp-v1.json, vectors/anmp-v1-radio-list.json and, for the patron, vectors/anmp-v1-radio-flows.json.
 package anmp
 
 import (

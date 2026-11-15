@@ -9,6 +9,8 @@ serialization = "1.11.0"
 cryptography  = "0.6.0"
 bouncycastle  = "1.85"
 ktor          = "3.5.2"
+# Meshtastic protobufs (GPL-3.0, ADR 0098), the same as meshtastic-sdk in the App uses.
+meshtasticProtobufs = "2.8.1"
 
 [libraries]
 serialization-cbor            = { module = "org.jetbrains.kotlinx:kotlinx-serialization-cbor", version.ref = "serialization" }
@@ -20,6 +22,8 @@ cryptography-provider-jdk     = { module = "dev.whyoleg.cryptography:cryptograph
 cryptography-provider-optimal = { module = "dev.whyoleg.cryptography:cryptography-provider-optimal", version.ref = "cryptography" }
 ktor-client-mock              = { module = "io.ktor:ktor-client-mock", version.ref = "ktor" }
 bouncycastle                  = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bouncycastle" }
+
+meshtastic-protobufs          = { module = "org.meshtastic:protobufs", version.ref = "meshtasticProtobufs" }
 
 [plugins]
 kotlinMultiplatform               = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

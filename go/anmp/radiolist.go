@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -16,21 +17,73 @@ var RadioPresets = []string{
 	"SHORT_FAST", "SHORT_SLOW", "SHORT_TURBO",
 }
 
+// RadioLoraRegions are the Meshtastic LoRa region codes a region may name (RegionCode without UNSET); others are skipped.
+var RadioLoraRegions = []string{
+	"US", "EU_433", "EU_868", "CN", "JP", "ANZ", "KR", "TW", "RU", "IN", "NZ_865", "TH", "LORA_24", "UA_433",
+	"UA_868", "MY_433", "MY_919", "SG_923", "PH_433", "PH_868", "PH_915", "ANZ_433", "KZ_433", "KZ_863", "NP_865",
+	"BR_902",
+}
+
+// RadioDefaultLora is the LoRa region of a list region that names none: the lists before this field were all for Europe.
+const RadioDefaultLora = "EU_868"
+
+// RadioBorderMarginKm is the distance to a border before a radio changes region (ADR 0054 §1).
+const RadioBorderMarginKm = 2.0
+
+const kmPerDegree = 111.195
+
 // RadioList is the content of the radio list (ADR 0054 §1b, spec "Radio list"): regions with their area, the preset
 // of channel 0, whether ANMP goes out on channel 0, and the communities' public channels. ANDP checks head and
 // signature (andp.NetworkList.AcceptRadio); ParseRadioList reads what it accepted.
 type RadioList struct {
 	Issued  int64 // Unix milliseconds
 	Regions []RadioRegion
+	Gateway *RadioGateway // where radios on Wi-Fi upload as gateways (ADR 0054 §5b); nil: no radio becomes a gateway
 }
 
-// RadioRegion is one region: Area as [lat, lon] points of a simple polygon, Preset of channel 0, its communities.
+// RadioGateway is the anynear MQTT server for gateways (ADR 0054 §5b). The login is public, it is on every gateway.
+// Host is a DNS name or IPv4 address (letters, digits, '.', '-'). Lengths are those the Meshtastic firmware stores:
+// the address and User at most 63 bytes, Password and Root at most 31.
+type RadioGateway struct {
+	Host     string
+	Port     int
+	TLS      bool
+	User     string
+	Password string
+	Root     string
+}
+
+// Gateway ports when the list names none.
+const (
+	RadioGatewayPort    = 1883
+	RadioGatewayTLSPort = 8883
+)
+
+// Address is the value of the firmware's MQTT address: the host, with ":port" only if it is not the default for TLS.
+func (g *RadioGateway) Address() string {
+	if g.Port == gatewayDefaultPort(g.TLS) {
+		return g.Host
+	}
+	return g.Host + ":" + strconv.Itoa(g.Port)
+}
+
+func gatewayDefaultPort(tls bool) int {
+	if tls {
+		return RadioGatewayTLSPort
+	}
+	return RadioGatewayPort
+}
+
+// RadioRegion is one region: Area as [lat, lon] points of a simple polygon, the radio settings there (Lora region
+// code, Preset of channel 0, Frequency in MHz or 0 for the default slot of region and preset), its communities.
 type RadioRegion struct {
 	Name        string
 	Area        [][2]float64
 	Preset      string
 	Channel0    bool // whether ANMP goes out on channel 0 here; otherwise only on the channel anynear
 	Communities []RadioCommunity
+	Lora        string
+	Frequency   float64
 }
 
 // RadioCommunity is a community's public channel (ADR 0054 §1a): Channel as on the radio (1–11 bytes), PSK its
@@ -72,7 +125,53 @@ func ParseRadioList(text []byte) (*RadioList, error) {
 			l.Regions = append(l.Regions, r)
 		}
 	}
+	l.Gateway = readGateway(obj["gateway"])
 	return l, nil
+}
+
+// readGateway reads the gateway block; nil if it is missing or anything in it is invalid.
+func readGateway(e any) *RadioGateway {
+	o, ok := e.(map[string]any)
+	if !ok {
+		return nil
+	}
+	host, ok := o["host"].(string)
+	if !ok || host == "" || strings.IndexFunc(host, func(c rune) bool {
+		return !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '-')
+	}) >= 0 {
+		return nil
+	}
+	tls := false
+	if v, present := o["tls"]; present {
+		if tls, ok = jsonBool(v); !ok {
+			return nil
+		}
+	}
+	port := gatewayDefaultPort(tls)
+	if v, present := o["port"]; present {
+		n, ok := jsonLong(v)
+		if !ok || n < 1 || n > 65535 {
+			return nil
+		}
+		port = int(n)
+	}
+	user, ok := o["user"].(string)
+	if !ok || user == "" || len(user) > 63 {
+		return nil
+	}
+	pass, ok := o["pass"].(string)
+	if !ok || len(pass) > 31 {
+		return nil
+	}
+	root, ok := o["root"].(string)
+	if !ok || root == "" || len(root) > 31 {
+		return nil
+	}
+	g := &RadioGateway{host, port, tls, user, pass, root}
+	if len(g.Address()) > 63 {
+		return nil
+	}
+	return g
 }
 
 // RegionAt gives the first region whose area contains the point, nil outside all regions.
@@ -83,6 +182,57 @@ func (l *RadioList) RegionAt(lat, lon float64) *RadioRegion {
 		}
 	}
 	return nil
+}
+
+// RegionFor gives the region for a radio at the point with hysteresis at borders, exactly like RadioList.regionFor of
+// kotlin/core: current (a region name) is kept while the point is inside it or less than marginKm outside, unless an
+// earlier region contains the point at least marginKm deep. Otherwise the first region containing the point at least
+// marginKm deep, else the first containing it at all; nil outside all regions.
+func (l *RadioList) RegionFor(lat, lon float64, current string, marginKm float64) *RadioRegion {
+	deep, held := -1, -1
+	for i := range l.Regions {
+		r := &l.Regions[i]
+		if deep < 0 && r.Contains(lat, lon) && r.BorderDistanceKm(lat, lon) >= marginKm {
+			deep = i
+		}
+		if held < 0 && current != "" && r.Name == current {
+			held = i
+		}
+	}
+	if held >= 0 {
+		r := &l.Regions[held]
+		if r.Contains(lat, lon) || r.BorderDistanceKm(lat, lon) < marginKm {
+			if deep >= 0 && deep < held {
+				return &l.Regions[deep]
+			}
+			return r
+		}
+	}
+	if deep >= 0 {
+		return &l.Regions[deep]
+	}
+	return l.RegionAt(lat, lon)
+}
+
+// BorderDistanceKm is the shortest distance in km from the point to the border of Area, inside or outside, in a plane
+// approximation around the point (equirectangular).
+func (r *RadioRegion) BorderDistanceKm(lat, lon float64) float64 {
+	kx := kmPerDegree * math.Cos(lat*math.Pi/180)
+	best := math.MaxFloat64
+	j := len(r.Area) - 1
+	for i := range r.Area {
+		ax, ay := (r.Area[j][1]-lon)*kx, (r.Area[j][0]-lat)*kmPerDegree
+		bx, by := (r.Area[i][1]-lon)*kx, (r.Area[i][0]-lat)*kmPerDegree
+		dx, dy := bx-ax, by-ay
+		t := 0.0
+		if l := dx*dx + dy*dy; l != 0 {
+			t = min(max(-(ax*dx+ay*dy)/l, 0), 1)
+		}
+		px, py := ax+t*dx, ay+t*dy
+		best = min(best, math.Sqrt(px*px+py*py))
+		j = i
+	}
+	return best
 }
 
 // Contains is the even-odd test over the polygon; points on the border may count either way.
@@ -137,7 +287,19 @@ func readRegion(e any) (RadioRegion, bool) {
 	if b, ok := jsonBool(o["channel0"]); ok {
 		channel0 = b
 	}
-	r := RadioRegion{Name: name, Area: area, Preset: preset, Channel0: channel0, Communities: []RadioCommunity{}}
+	lora := RadioDefaultLora
+	if v, present := o["lora"]; present {
+		if lora, ok = v.(string); !ok || !slices.Contains(RadioLoraRegions, lora) {
+			return RadioRegion{}, false
+		}
+	}
+	frequency := 0.0
+	if v, present := o["frequency"]; present {
+		if frequency, ok = jsonDouble(v); !ok || !(frequency == 0 || frequency >= 100 && frequency <= 3000) {
+			return RadioRegion{}, false
+		}
+	}
+	r := RadioRegion{Name: name, Area: area, Preset: preset, Channel0: channel0, Communities: []RadioCommunity{}, Lora: lora, Frequency: frequency}
 	communities, _ := o["communities"].([]any)
 	for _, c := range communities {
 		if c, ok := readCommunity(c); ok {

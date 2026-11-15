@@ -6,10 +6,11 @@ It does not need ANDP: the relay checks the radio list's head and signature, thi
 
 | Package | Content |
 |---|---|
-| `anmp` | frame and header (`Peek`, `EncodeHeader`), open packets `ask` and `patron` (`EncodeOpen`), sealed packets (`Encode`, `Decode`), exact size and radio budget (`Size`, `MaxTextBytes`, `FitsRadio`), radio rule (`Kind.Radio`), public form (`IsPublicForm`), signs of life and helpers' answers over radio (`Alive`, `Care`, `Valid`), channel PSK, radio secrets, sender and route tags per hour, chains, pickup windows and their tags, `pickup` with one-time keys (`PickupPacket`, `OpenPickup`), radio list content (`ParseRadioList`), spaces of the radio inbox |
+| `anmp` | frame and header (`Peek`, `EncodeHeader`), open packets `ask` and `patron` (`EncodeOpen`), sealed packets (`Encode`, `Decode`), exact size and radio budget (`Size`, `MaxTextBytes`, `FitsRadio`), radio rule (`Kind.Radio`), public form (`IsPublicForm`), signs of life and helpers' answers over radio (`Alive`, `Care`, `Valid`), channel PSK, radio secrets, sender and route tags per hour, chains, pickup windows and their tags, `pickup` with one-time keys (`PickupPacket`, `OpenPickup`), radio list content (`ParseRadioList`, with `Gateway`), spaces of the radio inbox, the patron role (`Patron` with `AppPatron` and `BridgePatron`: wait, offer, pickup, choice of packets, limits per ask, hour, patronage and gateway) |
 
 Kotlin (`kotlin/format`, `kotlin/core`) is the reference and writes the vectors; `go test ./...` checks every radio
-vector of `../vectors/anmp-v1.json` and all of `../vectors/anmp-v1-radio-list.json`.
+vector of `../vectors/anmp-v1.json`, all of `../vectors/anmp-v1-radio-list.json` and every flow of
+`../vectors/anmp-v1-radio-flows.json`.
 
 ## Use
 
@@ -27,5 +28,16 @@ for _, w := range p.Windows {
 	for _, t := range anmp.WindowTags(w, p.Hour) {
 		// t.Hour, t.Tag: match against header field 6 (route) of the radio inbox entries
 	}
+}
+
+// Or the whole role, as the bridge does it: it never asks, it only becomes a patron.
+role := anmp.NewPatron(anmp.BridgePatron, bridgeTag)
+out, err := role.Ask(now, ask, &hops, nil, gatewayID) // offer due after 30 s plus a random part
+out = role.HeardPatron(now)                          // someone else answered: our offer stays quiet
+out = role.Advance(now)                              // offers whose wait is over (role.NextDue says when)
+out = role.Pickup(now, pickup, inbox)                // patron now: up to 5 packets, newest first
+out = role.Serve(now, inbox)                         // news for the patronages, within the limits
+for _, s := range out.Sends {
+	// s.Packet through gateway s.Gateway with hop limit s.HopLimit; out.Limits: what was held back
 }
 ```

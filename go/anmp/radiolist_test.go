@@ -24,11 +24,29 @@ type radioListVectors struct {
 		Lon    float64 `json:"lon"`
 		Region *string `json:"region"`
 	} `json:"points"`
+	Choices []struct {
+		Name    string  `json:"name"`
+		Lat     float64 `json:"lat"`
+		Lon     float64 `json:"lon"`
+		Current *string `json:"current"`
+		Region  *string `json:"region"`
+	} `json:"choices"`
 }
 
 type vRadioList struct {
 	Issued  int64     `json:"issued"`
 	Regions []vRegion `json:"regions"`
+	Gateway *vGateway `json:"gateway"`
+}
+
+type vGateway struct {
+	Host    string `json:"host"`
+	Port    int    `json:"port"`
+	TLS     bool   `json:"tls"`
+	User    string `json:"user"`
+	Pass    string `json:"pass"`
+	Root    string `json:"root"`
+	Address string `json:"address"`
 }
 
 type vRegion struct {
@@ -37,6 +55,8 @@ type vRegion struct {
 	Preset      string       `json:"preset"`
 	Channel0    bool         `json:"channel0"`
 	Communities []vCommunity `json:"communities"`
+	Lora        string       `json:"lora"`
+	Frequency   float64      `json:"frequency"`
 }
 
 type vCommunity struct {
@@ -75,8 +95,11 @@ func TestRadioListVectors(t *testing.T) {
 			t.Fatal(err)
 		}
 		have := vRadioList{Issued: got.Issued}
+		if g := got.Gateway; g != nil {
+			have.Gateway = &vGateway{g.Host, g.Port, g.TLS, g.User, g.Password, g.Root, g.Address()}
+		}
 		for _, r := range got.Regions {
-			e := vRegion{Name: r.Name, Area: r.Area, Preset: r.Preset, Channel0: r.Channel0}
+			e := vRegion{Name: r.Name, Area: r.Area, Preset: r.Preset, Channel0: r.Channel0, Lora: r.Lora, Frequency: r.Frequency}
 			for _, cm := range r.Communities {
 				e.Communities = append(e.Communities, vCommunity{cm.Name, cm.Channel, hex.EncodeToString(cm.PSK), cm.Preset, cm.Operator, cm.Source})
 			}
@@ -101,6 +124,22 @@ func TestRadioListVectors(t *testing.T) {
 			t.Errorf("%s: in %s, Kotlin finds no region", p.Name, r.Name)
 		case p.Region != nil && (r == nil || r.Name != *p.Region):
 			t.Errorf("%s: %v, Kotlin finds %s", p.Name, r, *p.Region)
+		}
+	}
+	if len(v.Choices) == 0 {
+		t.Fatal("choices missing")
+	}
+	for _, c := range v.Choices {
+		current := ""
+		if c.Current != nil {
+			current = *c.Current
+		}
+		r := list.RegionFor(c.Lat, c.Lon, current, RadioBorderMarginKm)
+		switch {
+		case c.Region == nil && r != nil:
+			t.Errorf("%s: %s, Kotlin finds no region", c.Name, r.Name)
+		case c.Region != nil && (r == nil || r.Name != *c.Region):
+			t.Errorf("%s: %v, Kotlin finds %s", c.Name, r, *c.Region)
 		}
 	}
 }

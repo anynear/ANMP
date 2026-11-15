@@ -52,7 +52,7 @@ class GatewaySetupTest {
     @Test
     fun privatePrimaryIsNeverUploaded() {
         val channels = listOf(
-            channel(0, "k3vin", Channel.Role.PRIMARY, psk = PRIVATE),
+            channel(0, "home", Channel.Role.PRIMARY, psk = PRIVATE),
             channel(1, "", Channel.Role.SECONDARY),
             channel(3, AnmpInfo.RADIO_CHANNEL_NAME, Channel.Role.SECONDARY, psk = PRIVATE),
         )
@@ -65,7 +65,7 @@ class GatewaySetupTest {
     @Test
     fun wrongUplinkOnPrivateChannelGoesOff() {
         val channels = listOf(
-            channel(0, "k3vin", Channel.Role.PRIMARY, uplink = true, psk = PRIVATE),
+            channel(0, "home", Channel.Role.PRIMARY, uplink = true, psk = PRIVATE),
             channel(1, "", Channel.Role.SECONDARY),
             channel(3, AnmpInfo.RADIO_CHANNEL_NAME, Channel.Role.SECONDARY, uplink = true, psk = PRIVATE),
         )
@@ -75,7 +75,7 @@ class GatewaySetupTest {
         assertEquals(false, off.uplink_enabled)
         assertEquals(false, off.downlink_enabled)
         assertEquals(PRIVATE, off.psk, "the rest of the channel stays")
-        assertEquals("k3vin", off.name)
+        assertEquals("home", off.name)
         assertEquals(true, on.uplink_enabled)
     }
 
@@ -83,7 +83,7 @@ class GatewaySetupTest {
     @Test
     fun backOnBluetoothSwitchesWrongUplinkOffToo() {
         val channels = listOf(
-            channel(0, "k3vin", Channel.Role.PRIMARY, uplink = true, psk = PRIVATE),
+            channel(0, "home", Channel.Role.PRIMARY, uplink = true, psk = PRIVATE),
             channel(1, "", Channel.Role.SECONDARY, uplink = true),
         )
         val steps = GatewaySetup.plan(snapshot(wifi = false, channels = channels, mqtt = GatewaySetup.mqtt(null, gateway)), gateway)
@@ -98,7 +98,7 @@ class GatewaySetupTest {
         assertTrue(DefaultChannel.isDefault(channel(2, "", Channel.Role.SECONDARY), null), "empty name without preset")
         assertEquals(false, DefaultChannel.isDefault(channel(2, "ShortSlow", Channel.Role.SECONDARY), null))
         assertEquals(false, DefaultChannel.isDefault(channel(2, "LongFast", Channel.Role.SECONDARY), shortSlow), "name of another preset")
-        assertEquals(false, DefaultChannel.isDefault(channel(0, "k3vin", Channel.Role.PRIMARY), shortSlow), "own name")
+        assertEquals(false, DefaultChannel.isDefault(channel(0, "home", Channel.Role.PRIMARY), shortSlow), "own name")
         assertEquals(false, DefaultChannel.isDefault(channel(0, "", Channel.Role.PRIMARY, psk = PRIVATE), shortSlow), "own key")
         assertEquals(false, DefaultChannel.isDefault(channel(0, "", Channel.Role.PRIMARY, psk = ByteString.EMPTY), shortSlow), "unencrypted")
         assertEquals(false, DefaultChannel.isDefault(channel(2, "", Channel.Role.DISABLED), shortSlow))
@@ -106,8 +106,8 @@ class GatewaySetupTest {
         assertTrue(DefaultChannel.isDefault(channel(0, "Custom", Channel.Role.PRIMARY), custom))
         // Two default channels: the primary one counts.
         assertEquals(4, DefaultChannel.index(listOf(channel(1, "", Channel.Role.SECONDARY), channel(4, "", Channel.Role.PRIMARY)), shortSlow))
-        assertEquals(1, DefaultChannel.index(listOf(channel(0, "k3vin", Channel.Role.PRIMARY, psk = PRIVATE), channel(1, "", Channel.Role.SECONDARY)), shortSlow))
-        assertNull(DefaultChannel.index(listOf(channel(0, "k3vin", Channel.Role.PRIMARY, psk = PRIVATE)), shortSlow))
+        assertEquals(1, DefaultChannel.index(listOf(channel(0, "home", Channel.Role.PRIMARY, psk = PRIVATE), channel(1, "", Channel.Role.SECONDARY)), shortSlow))
+        assertNull(DefaultChannel.index(listOf(channel(0, "home", Channel.Role.PRIMARY, psk = PRIVATE)), shortSlow))
     }
 
     @Test

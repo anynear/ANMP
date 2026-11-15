@@ -9,6 +9,7 @@ import app.anynear.anmp.AnmpDevice
 import app.anynear.anmp.AnmpEphemeral
 import app.anynear.anmp.AnmpHeader
 import app.anynear.anmp.AnmpKind
+import app.anynear.anmp.AnmpMailbox
 import app.anynear.anmp.AnmpMessage
 import app.anynear.anmp.AnmpRadio
 import app.anynear.anmp.AnmpVerifier
@@ -150,7 +151,12 @@ class RadioTimings(
  * circle key, direct ones with the key of the device pair (scope `""`). Packets carry only hourly tags: the sender tag
  * of this device and the route tag of the target (device or circle).
  */
-internal class RadioKeys(private val device: AnmpDevice, private val nowSeconds: () -> Long) {
+internal class RadioKeys(
+    private val device: AnmpDevice,
+    /** Mailbox recipient of the own person (ADR 0084, 0107): direct packets over radio go to it. */
+    private val mailbox: AnmpMailbox,
+    private val nowSeconds: () -> Long,
+) {
     private val lock = Mutex()
     private val circleCiphers = mutableMapOf<String, AnmpCipher>()
     private val radioSecrets = mutableMapOf<String, ByteArray>()
@@ -228,7 +234,11 @@ internal class RadioKeys(private val device: AnmpDevice, private val nowSeconds:
         return Anmp.encode(header, content, circle.id, circleCipher(circle.secret), device)
     }
 
-    /** Direct packet to the device [peerDevice] (message, reaction, read and delivery receipt), without signature. */
+    /**
+     * Direct packet (message, reaction, read and delivery receipt), without signature, to [peerDevice]: a person's
+     * mailbox recipient (ID and key, ADR 0107) or, for chains without one, a device. Route tag and pair key are made
+     * the same way for both, from the ID and key given.
+     */
     suspend fun directPacket(kind: AnmpKind, peerDevice: String, peerPublicKey: String, content: AnmpContent): ByteArray {
         val peerId = B64.decode(peerDevice)
         val h = hour()
@@ -248,7 +258,7 @@ internal class RadioKeys(private val device: AnmpDevice, private val nowSeconds:
      */
     suspend fun pickupPackets(circleSecrets: List<String>, patronKey: ByteArray): List<ByteArray> {
         val h = hour()
-        val secrets = listOf(deviceRadioSecret(device.deviceId)) + circleSecrets.map { circleRadioSecret(it) }
+        val secrets = listOf(deviceRadioSecret(mailbox.id), deviceRadioSecret(device.deviceId)) + circleSecrets.map { circleRadioSecret(it) }
         val windows = secrets.flatMap { AnmpRadio.pickupWindows(it, h) }
         val mine = AnmpEphemeral.generate()
         val sender = ownSender(h)
@@ -264,6 +274,7 @@ internal class RadioKeys(private val device: AnmpDevice, private val nowSeconds:
         val from = mutableMapOf<String, String>()
         val hours = AnmpRadio.acceptedHours(atSeconds)
         routeTags(deviceRadioSecret(device.deviceId), hours).values.forEach { routes[key(it)] = RadioTarget.Device }
+        routeTags(deviceRadioSecret(mailbox.id), hours).values.forEach { routes[key(it)] = RadioTarget.Person }
         for (c in circles) {
             for (secret in c.openSecrets(atSeconds * 1000)) {
                 routeTags(circleRadioSecret(secret), hours).values.forEach { routes[key(it)] = RadioTarget.Circle(c.id) }
@@ -287,8 +298,13 @@ internal class RadioKeys(private val device: AnmpDevice, private val nowSeconds:
             Anmp.decode(packet, circle.id, circleCipher(it), verify, requireSignature = true)
         }
 
-    suspend fun openDirect(packet: ByteArray, peerDevice: String, peerPublicKey: String): AnmpMessage? {
-        val cipher = device.directCipher(B64.decode(peerDevice), B64.decode(peerPublicKey))
+    /** Opens a direct packet of the device [peerDevice], sent to this device or, with [toPerson], to the own person. */
+    suspend fun openDirect(packet: ByteArray, peerDevice: String, peerPublicKey: String, toPerson: Boolean = false): AnmpMessage? {
+        val cipher = if (toPerson) {
+            mailbox.directCipher(B64.decode(peerDevice), B64.decode(peerPublicKey))
+        } else {
+            device.directCipher(B64.decode(peerDevice), B64.decode(peerPublicKey))
+        }
         return Anmp.decode(packet, Anmp.DIRECT_SCOPE, cipher, AnmpVerifier.none, requireSignature = false)
     }
 
@@ -307,9 +323,11 @@ internal class RadioKeys(private val device: AnmpDevice, private val nowSeconds:
     }
 }
 
-/** Where a radio packet belongs: to this device or into an own circle. */
+/** Where a radio packet belongs: to this device, to the own person (ADR 0107) or into an own circle. */
 internal sealed class RadioTarget {
     data object Device : RadioTarget()
+
+    data object Person : RadioTarget()
 
     data class Circle(val circleId: String) : RadioTarget()
 }
@@ -320,6 +338,6 @@ internal class RadioTable(private val routes: Map<String, RadioTarget>, private 
 
     fun sender(tag: ByteArray): String? = senders[RadioKeys.key(tag)]
 
-    /** `true` if a route tag belongs to this device or an own circle. */
+    /** `true` if a route tag belongs to this device, the own person or an own circle. */
     fun isOwn(route: ByteArray): Boolean = RadioKeys.key(route) in routes
 }

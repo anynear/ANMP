@@ -91,10 +91,10 @@ internal class FakeNet private constructor(val netKey: SigningKey, val relays: L
     }
 
     // Without the network's radio inbox and radio software: tests that need them set up their own.
-    fun config(timings: CoreTimings = TEST_TIMINGS) =
+    fun config(timings: CoreTimings = TEST_TIMINGS, legacyDirect: Boolean = false) =
         AnmpCoreConfig(
             list.id, netKey.key, seedUrl = "https://seed.test", timings = timings, radioInboxSpace = "", radioInboxGrant = "",
-            radioSoftwareSpace = "", radioSoftwareGrant = "",
+            radioSoftwareSpace = "", radioSoftwareGrant = "", legacyDirect = legacyDirect,
         )
 
     fun relay(node: Key): FakeRelay = relays.first { it.node.key == node }

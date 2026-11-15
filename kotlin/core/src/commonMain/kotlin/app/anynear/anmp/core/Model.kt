@@ -174,6 +174,8 @@ internal data class CoreState(
     val issued: List<IssuedGrant> = emptyList(),
     val grants: List<PeerGrant> = emptyList(),
     val profile: OwnProfile = OwnProfile(),
+    /** Settings of the app that apply to this device only (ADR 0106), opaque to the core; kept in the device space. */
+    val deviceSettings: List<SharedSetting> = emptyList(),
     val uploads: List<UploadedImage> = emptyList(),
     /** Circles for which a history index came: do not ask again. */
     val historyOffered: List<String> = emptyList(),
@@ -197,14 +199,60 @@ internal data class CoreState(
      */
     val previousStore: String? = null,
     val previousStoreSince: Long = 0,
+    /** The own mailbox was moved once to the form to the person (ADR 0107 §6): old per-device entries re-written. */
+    val mailboxMigrated: Boolean = false,
+    /** The app's own direct history was written as own copies once (ADR 0107 §6, [AnmpCore.keepOwnHistory]). */
+    val historyKept: Boolean = false,
+    /** The own mailbox was read through once on this device (ADR 0107 §8). */
+    val mailboxRead: Boolean = false,
+    /** Circles whose space was read through once on this device (ADR 0107 §8). */
+    val circlesRead: List<String> = emptyList(),
     /** Own signs of life and those we watch (ADR 0083 §5). */
     val alive: List<AlivePlan> = emptyList(),
+    /** Persons whose mailbox refuses us (every holder 403), with since when (ms): person ID → time (ADR 0046). */
+    val unreachable: Map<String, Long> = emptyMap(),
 )
 
 /** A device of a person: device ID, name, time added (ms), radio node (ADR 0042). */
 @JsExport
 @Serializable
-data class DeviceInfo(val deviceId: String, val name: String, val added: Long = 0, val node: Long = 0)
+data class DeviceInfo(
+    val deviceId: String,
+    val name: String,
+    val added: Long = 0,
+    val node: Long = 0,
+    /** The device moved its old mailbox entries and history to the person (ADR 0107 §6). */
+    val moved: Boolean = false,
+)
+
+/**
+ * What a device has not read through once yet (ADR 0107 §8): its own mailbox ([mailbox], direct conversations) and
+ * the circles [circles] (IDs). The app shows that messages are still loading.
+ */
+data class HistoryLoading(val mailbox: Boolean, val circles: List<String>) {
+    val any: Boolean get() = mailbox || circles.isNotEmpty()
+}
+
+/**
+ * One direct message of the app's own history, for [AnmpCore.keepOwnHistory] (ADR 0107 §6): in the conversation with
+ * the person [peerPerson] (person ID, or a device ID of it), [author] the sender's device for a received one, `null` for one the own person sent.
+ */
+class OwnHistoryItem(
+    val peerPerson: String,
+    val mid: String,
+    val tsMillis: Long,
+    val text: String,
+    val author: String?,
+    val attachments: List<app.anynear.anmp.AnmpAttachment> = emptyList(),
+    val replyTo: String? = null,
+    val replyFrom: String? = null,
+)
+
+/**
+ * An own device with settings in the device space (ADR 0106): [deviceId] b64u, [changed] when it last wrote them (ms),
+ * [names] of the settings stored for it.
+ */
+data class StoredDevice(val deviceId: String, val changed: Long, val names: List<String>)
 
 /** Result of adding an own device by its pairing link (ADR 0042 §5). */
 @JsExport

@@ -20,6 +20,18 @@ import kotlinx.coroutines.sync.withLock
 /** What the radio way reads from the core. */
 internal interface RadioCore {
     val keys: RadioKeys
+
+    /**
+     * Where a direct packet to the device [deviceId] goes over radio: the mailbox recipient of its person (ID, key) when
+     * its chain names one (ADR 0107), else the device with its pinned key. `null` if unknown.
+     */
+    fun radioPeer(deviceId: String): Peer?
+
+    /**
+     * A direct packet ([kind]: message, reaction, withdrawal) of [fromDevice] that came over radio: the core writes it as
+     * an own copy into the own mailbox unless it comes over the internet as well (ADR 0106 §6, 0107 §4).
+     */
+    fun copyFromRadio(kind: AnmpKind, content: AnmpContent, fromDevice: String)
     val circles: List<CircleState>
     val members: List<MemberState>
     val hasInbox: Boolean
@@ -124,7 +136,9 @@ internal class RadioWay(
         val ofTarget = if (entry.circleId != null) {
             members.filter { it.circleId == entry.circleId && it.deviceId != own }
         } else {
-            members.filter { it.deviceId == entry.deviceId }
+            // To a person: a sign of any of its devices counts (ADR 0107).
+            val person = entry.deviceId?.let(core::personOf)
+            members.filter { it.deviceId == entry.deviceId || (person != null && core.personOf(it.deviceId) == person) }
         }
         return ofTarget.map { it.node.toInt() }.filter { it != 0 && it != core.ownNode.toInt() }.toSet()
     }
@@ -136,7 +150,18 @@ internal class RadioWay(
     suspend fun radioHeard(node: Int) = queue.onHeard(node, null, HeardBy.CHECK)
 
     /** Queues an own message for the radio, kept over restarts; states come as [CoreEvent.RadioSend]. */
-    suspend fun queueText(entry: RadioQueued) = queue.add(entry)
+    /**
+     * Queues an own message for the radio. To a person with a mailbox recipient (ADR 0107) one entry reaches every
+     * device of it: further entries of the same message for other devices of that person are left out.
+     */
+    suspend fun queueText(entry: RadioQueued) {
+        val device = entry.deviceId
+        if (device != null && core.radioPeer(device)?.person == true) {
+            val person = core.personOf(device)
+            if (queue.has { it.mid == entry.mid && it.deviceId?.let(core::personOf) == person }) return
+        }
+        queue.add(entry)
+    }
 
     fun start() {
         queue.start()
@@ -175,6 +200,11 @@ internal class RadioWay(
 
     private fun pinnedKey(deviceId: String): String? = core.members.firstOrNull { it.deviceId == deviceId }?.publicKey
 
+    private suspend fun directPacket(kind: AnmpKind, deviceId: String, content: AnmpContent): ByteArray? {
+        val peer = core.radioPeer(deviceId) ?: return null
+        return core.keys.directPacket(kind, peer.deviceId, peer.publicKey, content)
+    }
+
     private fun check(kind: AnmpKind) = check(kind.radio) { "${kind.conv} may not go over radio" }
 
     /**
@@ -198,7 +228,7 @@ internal class RadioWay(
             } else {
                 check(AnmpKind.DIRECT)
                 val device = deviceId ?: return null
-                core.keys.directPacket(AnmpKind.DIRECT, device, pinnedKey(device) ?: return null, content)
+                directPacket(AnmpKind.DIRECT, device, content)
             }
         }
         // The own radio goes along when the text leaves room, so others learn it without internet (ADR 0058); text wins.
@@ -227,7 +257,7 @@ internal class RadioWay(
             core.keys.circlePacket(AnmpKind.REACT, circle(circleId) ?: return null, content)
         } else {
             val device = deviceId ?: return null
-            core.keys.directPacket(AnmpKind.REACT, device, pinnedKey(device) ?: return null, content)
+            directPacket(AnmpKind.REACT, device, content) ?: return null
         }
         return send(packet)
     }
@@ -242,7 +272,7 @@ internal class RadioWay(
             core.keys.circlePacket(AnmpKind.DELETE, circle(circleId) ?: return null, content)
         } else {
             val device = deviceId ?: return null
-            core.keys.directPacket(AnmpKind.DELETE, device, pinnedKey(device) ?: return null, content)
+            directPacket(AnmpKind.DELETE, device, content) ?: return null
         }
         return send(packet)
     }
@@ -292,13 +322,13 @@ internal class RadioWay(
      */
     suspend fun read(deviceId: String, mids: List<String>): RadioSent? {
         check(AnmpKind.READ)
-        val key = pinnedKey(deviceId) ?: return null
+        if (core.radioPeer(deviceId) == null) return null
         val header = RadioKeys.budgetHeader(AnmpKind.READ, null)
         var batch = mids.mapNotNull(::midBytes)
         fun content() = AnmpContent(id = Anmp.newMessageId(), ts = core.nowMillis() / 1000, ids = batch)
         while (batch.isNotEmpty() && !Anmp.fitsRadioSize(Anmp.size(header, content(), signed = false))) batch = batch.drop(1)
         if (batch.isEmpty()) return null
-        return send(core.keys.directPacket(AnmpKind.READ, deviceId, key, content()))
+        return send(directPacket(AnmpKind.READ, deviceId, content()) ?: return null)
     }
 
     /**
@@ -313,7 +343,7 @@ internal class RadioWay(
         fun content(batch: List<ByteArray>) = AnmpContent(id = Anmp.newMessageId(), ts = core.nowMillis() / 1000, ids = batch, arrived = AnmpArrived.RADIO)
         var batch = ids
         while (batch.size > 1 && !Anmp.fitsRadioSize(Anmp.size(header, content(batch), signed = false))) batch = batch.dropLast(1)
-        val sent = send(core.keys.directPacket(AnmpKind.RECEIPT, sender.deviceId, sender.publicKey, content(batch)), hopLimit)
+        val sent = directPacket(AnmpKind.RECEIPT, sender.deviceId, content(batch))?.let { send(it, hopLimit) }
         if (sent == null) 0 else batch.size
     }
 
@@ -378,7 +408,7 @@ internal class RadioWay(
         val sender = table.sender(header.from)?.let { d -> core.members.lastOrNull { it.deviceId == d && (inCircle == null || it.circleId == inCircle) } }
             ?: return core.log(
                 "radio: sender unknown (sender tag) ${describe(header.kind, frame, fromInbox)}, for " +
-                    (if (target is RadioTarget.Circle) "circle ${target.circleId.take(6)}" else "this device") +
+                    (if (target is RadioTarget.Circle) "circle ${target.circleId.take(6)}" else if (target == RadioTarget.Person) "this person" else "this device") +
                     ", tag ${hex(header.from)}, hour ${AnmpRadio.hourOf(inboxSeconds ?: nowSeconds)} (now ${AnmpRadio.hourOf(nowSeconds)}), " +
                     "${core.members.map { it.deviceId }.distinct().size} known devices",
             )
@@ -386,7 +416,7 @@ internal class RadioWay(
         if (fromInbox) relay.onDelivered()
         val circle = (target as? RadioTarget.Circle)?.let { t -> circle(t.circleId) ?: return }
         val message = if (circle == null) {
-            core.keys.openDirect(payload, sender.deviceId, sender.publicKey)
+            core.keys.openDirect(payload, sender.deviceId, sender.publicKey, toPerson = target == RadioTarget.Person)
         } else {
             core.keys.openCircle(payload, circle, verifyFrom(sender), (inboxSeconds?.times(1000)) ?: core.nowMillis())
         } ?: return core.log("radio: packet could not be opened ${describe(header.kind, frame, fromInbox)} from ${sender.deviceId.take(6)}")
@@ -400,6 +430,7 @@ internal class RadioWay(
         val conversation = if (circle == null) Conversation.Direct(core.personOf(sender.deviceId)) else Conversation.Circle(circle.id)
         // Packets heard twice: texts are recognized by the app, reactions and receipts act only once there.
         val packetKey = if (fromInbox) payload.contentHashCode() else frame.packetId
+        if (circle == null && message.header.kind in COPIED_KINDS) core.copyFromRadio(message.header.kind, content, sender.deviceId)
         when (message.header.kind) {
             AnmpKind.CIRCLE, AnmpKind.DIRECT -> {
                 if ((message.header.kind == AnmpKind.DIRECT) != (circle == null)) return
@@ -467,6 +498,9 @@ internal class RadioWay(
     }
 
     companion object {
+        /** Direct kinds that go into the own mailbox as a copy when they came only over radio (ADR 0107 §4). */
+        private val COPIED_KINDS = setOf(AnmpKind.DIRECT, AnmpKind.REACT, AnmpKind.DELETE)
+
         /** Hour tables kept in memory (entries of the radio inbox go back 30 days). */
         private const val MAX_TABLES = 48
         private const val MAX_RECEIPTS = 2_000

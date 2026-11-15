@@ -139,6 +139,15 @@ sealed class CoreEvent {
     /** No relay took the write in time or every relay refused it. */
     class SendFailed(val ref: String) : CoreEvent()
 
+    /**
+     * Every relay refused a direct message to [personId] for lack of a right: most likely the person deleted everything
+     * (ADR 0046) and took its grants back. Ends with [ContactReachable] once something of the person arrives again.
+     */
+    class ContactUnreachable(val personId: String, val since: Long) : CoreEvent()
+
+    /** [personId], marked by [ContactUnreachable], wrote us again or was removed. */
+    class ContactReachable(val personId: String) : CoreEvent()
+
     /** A member or contact appeared or changed ([member].circleId = [MemberState.CONTACTS] for contacts). */
     class MemberUpdated(val member: MemberState, val isNew: Boolean) : CoreEvent()
 

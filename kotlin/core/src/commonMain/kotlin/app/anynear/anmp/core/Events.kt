@@ -42,7 +42,25 @@ sealed class CoreEvent {
         /** Answer to the message with this ID of the installation with tag [replyFrom] (ADR 0092); both b64u or both `null`. */
         val replyTo: String? = null,
         val replyFrom: String? = null,
+        /** The sender passed on a message it got („Weitergeleitet“, content field 38, ADR 0118); no origin. */
+        val passedOn: Boolean = false,
+        /** A contact introduced to us in this message (ADR 0116); [text] is only its stand-in for older apps. */
+        val intro: Intro? = null,
+        /** From a person that asks to become a contact and is not yet one (ADR 0116 §7): no notification, shown with the request. */
+        val fromRequest: Boolean = false,
     ) : CoreEvent()
+
+    /**
+     * Something changed in [AnmpCore.contactRequests] or [AnmpCore.sentContactRequests] (ADR 0116). [ended]: a request of
+     * ours that ended at its time without an answer (person ID), so the app can say that it was not answered.
+     */
+    class ContactRequestsChanged(val ended: String? = null) : CoreEvent()
+
+    /**
+     * The person [toPerson] wants the contact [person] (named [name]) we introduced (ADR 0116 §3); the request is passed
+     * on to [person]. Whether it agrees, we do not learn.
+     */
+    class IntroAccepted(val introId: String, val toPerson: String, val person: String, val name: String) : CoreEvent()
 
     /**
      * Reaction [emoji] (`""` = withdrawn) by [fromDevice] on message [targetMid] of the installation with tag [targetTag]
@@ -82,6 +100,19 @@ sealed class CoreEvent {
      * with [AnmpCore.aliveStatus]; [AnmpCore.aliveNextAt] says when to look again without news.
      */
     class AliveChanged(val planId: String, val circleId: String) : CoreEvent()
+
+    /**
+     * A sign of life of another person, found by the iOS notification extension ([AnmpCore.wakeFetch], ADR 0117). Only
+     * reported, not stored: the app takes the packet over when it fetches itself. [owner] is the person of the plan,
+     * [timestampMillis] the time of the packet, [objectId] the ANDP object of the wake-up.
+     */
+    class AliveWake(
+        val objectId: String,
+        val circleId: String,
+        val owner: String,
+        val alive: app.anynear.anmp.AnmpAlive,
+        val timestampMillis: Long,
+    ) : CoreEvent()
 
     /**
      * A circle or direct message over radio (ADR 0021, 0051, 0057), heard or from the radio inbox ([relayed]).
@@ -206,3 +237,9 @@ sealed class CoreEvent {
         const val KIND_YOU_RESET = "you_reset"
     }
 }
+
+/**
+ * Result of [AnmpCore.wakeFetchResult]: what a wake-up found to show, and whether every space answered at at least one
+ * holder and every new entry could be read ([complete]). Only a complete empty result means "nothing to show".
+ */
+class WakeFetch(val events: List<CoreEvent>, val complete: Boolean)

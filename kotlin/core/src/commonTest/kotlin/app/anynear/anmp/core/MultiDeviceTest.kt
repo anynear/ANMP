@@ -14,7 +14,7 @@ class MultiDeviceTest {
     fun tabletIsTheSamePersonAndGetsEverything() = world {
         val phone = device("Anna")
         val ben = device("Ben")
-        assertIs<AddContactResult.Added>(ben.core.addContact(phone.core.ownContactLink()))
+        assertIs<AddContactResult.Added>(agreeContact(ben.core, phone.core))
         eventually { phone.core.canWriteTo(ben.deviceId) && ben.core.canWriteTo(phone.deviceId) }
         val circle = phone.core.createCircle("Familie")
         assertIs<JoinResult.Joined>(ben.core.joinCircle(phone.core.inviteLink(circle.id)!!))
@@ -63,7 +63,7 @@ class MultiDeviceTest {
         devices -= phone
 
         val anna = device("Anna")
-        assertIs<AddContactResult.Added>(anna.core.addContact(link))
+        assertIs<AddContactResult.Added>(agreeContact(anna.core, tablet.core, link))
         val out = assertNotNull(anna.core.sendDirect(phone.deviceId, "Neue Anfrage"))
         val got = tablet.await<CoreEvent.Message> { it.mid == out.mid }
         assertEquals(Conversation.Direct(anna.info.personId), got.conversation)
@@ -80,7 +80,7 @@ class MultiDeviceTest {
     fun removedTabletStopsAndContactsForgetIt() = world {
         val phone = device("Anna")
         val ben = device("Ben")
-        assertIs<AddContactResult.Added>(ben.core.addContact(phone.core.ownContactLink()))
+        assertIs<AddContactResult.Added>(agreeContact(ben.core, phone.core))
         eventually { phone.core.canWriteTo(ben.deviceId) && ben.core.canWriteTo(phone.deviceId) }
         val tablet = addTablet(phone)
         eventually { ben.core.membersOf(MemberState.CONTACTS).any { it.deviceId == tablet.deviceId } }
@@ -143,7 +143,7 @@ class MultiDeviceTest {
     fun afterTheftANewPersonKeyLocksTheStolenDeviceOut() = world {
         val phone = device("Anna")
         val ben = device("Ben")
-        assertIs<AddContactResult.Added>(ben.core.addContact(phone.core.ownContactLink()))
+        assertIs<AddContactResult.Added>(agreeContact(ben.core, phone.core))
         eventually { phone.core.canWriteTo(ben.deviceId) && ben.core.canWriteTo(phone.deviceId) }
         val circle = phone.core.createCircle("Familie")
         assertIs<JoinResult.Joined>(ben.core.joinCircle(phone.core.inviteLink(circle.id)!!))
@@ -259,7 +259,7 @@ class MultiDeviceTest {
     fun restoredBackupIsANewDevice() = world {
         val phone = device("Anna")
         val ben = device("Ben")
-        assertIs<AddContactResult.Added>(ben.core.addContact(phone.core.ownContactLink()))
+        assertIs<AddContactResult.Added>(agreeContact(ben.core, phone.core))
         eventually { phone.core.canWriteTo(ben.deviceId) && ben.core.canWriteTo(phone.deviceId) }
         val circle = phone.core.createCircle("Familie")
         assertIs<JoinResult.Joined>(ben.core.joinCircle(phone.core.inviteLink(circle.id)!!))
@@ -303,7 +303,7 @@ class MultiDeviceTest {
     fun emergencyCardBringsThePersonBackAndLocksTheLostPhone() = world {
         val phone = device("Anna")
         val ben = device("Ben")
-        assertIs<AddContactResult.Added>(ben.core.addContact(phone.core.ownContactLink()))
+        assertIs<AddContactResult.Added>(agreeContact(ben.core, phone.core))
         eventually { phone.core.canWriteTo(ben.deviceId) && ben.core.canWriteTo(phone.deviceId) }
         val circle = phone.core.createCircle("Familie")
         assertIs<JoinResult.Joined>(ben.core.joinCircle(phone.core.inviteLink(circle.id)!!))
@@ -432,7 +432,7 @@ class MultiDeviceTest {
         val tablet = addTablet(phone)
         eventually { tablet.core.ownDevices.value.size == 2 }
         val ben = device("Ben")
-        assertIs<AddContactResult.Added>(ben.core.addContact(tablet.core.ownContactLink()))
+        assertIs<AddContactResult.Added>(agreeContact(ben.core, tablet.core))
         eventually { ben.core.membersOf(MemberState.CONTACTS).any { it.deviceId == tablet.deviceId } }
         // Set on the phone: the tablet learns it from the profile space and sends it on to its contacts.
         val picture = ByteArray(5000) { 9 }
@@ -448,7 +448,7 @@ class MultiDeviceTest {
         // ADR 0107: direct messages go to the person's mailbox recipient, so a phone back from the card reads them.
         val phone = device("Anna")
         val ben = device("Ben")
-        assertIs<AddContactResult.Added>(ben.core.addContact(phone.core.ownContactLink()))
+        assertIs<AddContactResult.Added>(agreeContact(ben.core, phone.core))
         eventually { phone.core.canWriteTo(ben.deviceId) && ben.core.canWriteTo(phone.deviceId) }
         eventually { ben.core.membersOf(MemberState.CONTACTS).any { it.person == phone.info.personId } }
         eventually { phone.core.membersOf(MemberState.CONTACTS).any { it.person == ben.info.personId } }
@@ -484,7 +484,7 @@ class MultiDeviceTest {
         val legacy = net.config(legacyDirect = true)
         val phone = device("Anna", config = legacy)
         val ben = device("Ben", config = legacy)
-        assertIs<AddContactResult.Added>(ben.core.addContact(phone.core.ownContactLink()))
+        assertIs<AddContactResult.Added>(agreeContact(ben.core, phone.core))
         eventually { phone.core.canWriteTo(ben.deviceId) && ben.core.canWriteTo(phone.deviceId) }
         eventually { ben.core.membersOf(MemberState.CONTACTS).any { it.person == phone.info.personId } }
         eventually { phone.core.membersOf(MemberState.CONTACTS).any { it.person == ben.info.personId } }
@@ -600,7 +600,7 @@ class MultiDeviceTest {
     fun eraseEverythingRemovesThePersonFromTheNetwork() = world {
         val phone = device("Anna")
         val ben = device("Ben")
-        assertIs<AddContactResult.Added>(ben.core.addContact(phone.core.ownContactLink()))
+        assertIs<AddContactResult.Added>(agreeContact(ben.core, phone.core))
         eventually { phone.core.canWriteTo(ben.deviceId) && ben.core.canWriteTo(phone.deviceId) }
         val circle = phone.core.createCircle("Familie")
         assertIs<JoinResult.Joined>(ben.core.joinCircle(phone.core.inviteLink(circle.id)!!))
@@ -635,7 +635,7 @@ class MultiDeviceTest {
     fun contactsSeeAnErasedPersonAsUnreachable() = world {
         val phone = device("Anna")
         val ben = device("Ben")
-        assertIs<AddContactResult.Added>(ben.core.addContact(phone.core.ownContactLink()))
+        assertIs<AddContactResult.Added>(agreeContact(ben.core, phone.core))
         eventually { phone.core.canWriteTo(ben.deviceId) && ben.core.canWriteTo(phone.deviceId) }
         val hello = assertNotNull(ben.core.sendDirect(phone.deviceId, "Hallo"))
         phone.await<CoreEvent.Message> { it.mid == hello.mid }
@@ -708,7 +708,7 @@ class MultiDeviceTest {
         val tablet = addTablet(phone)
         eventually { tablet.core.ownDevices.value.size == 2 }
         val ben = device("Ben")
-        assertIs<AddContactResult.Added>(phone.core.addContact(ben.core.ownContactLink()))
+        assertIs<AddContactResult.Added>(agreeContact(phone.core, ben.core))
         eventually { phone.core.canWriteTo(ben.info.personId) }
         eventually { tablet.core.canWriteTo(ben.info.personId) }
     }
@@ -717,7 +717,7 @@ class MultiDeviceTest {
     fun copiesReachAnOwnDeviceWithoutACommonCircle() = world {
         val phone = device("Anna")
         val ben = device("Ben")
-        assertIs<AddContactResult.Added>(ben.core.addContact(phone.core.ownContactLink()))
+        assertIs<AddContactResult.Added>(agreeContact(ben.core, phone.core))
         eventually { phone.core.canWriteTo(ben.deviceId) }
         val tablet = addTablet(phone)
         eventually { tablet.core.ownDevices.value.size == 2 }

@@ -139,3 +139,19 @@ internal suspend fun eventually(timeout: Duration = 15.seconds, condition: suspe
         while (!condition()) kotlinx.coroutines.delay(50)
     }
 }
+
+/**
+ * [reader] adds the contact link [link] of [owner], and [owner] agrees to the request that follows (ADR 0116): what
+ * adding a contact link meant before. Returns the result of [AnmpCore.addContact].
+ */
+internal suspend fun agreeContact(reader: AnmpCore, owner: AnmpCore, link: String? = null, timeout: Duration = 15.seconds): AddContactResult {
+    val before = owner.contactRequests().map { it.person }.toSet()
+    val r = reader.addContact(link ?: owner.ownContactLink())
+    var person: String? = null
+    eventually(timeout) {
+        person = owner.contactRequests().map { it.person }.firstOrNull { it !in before }
+        person != null
+    }
+    owner.acceptContactRequest(person!!)
+    return r
+}

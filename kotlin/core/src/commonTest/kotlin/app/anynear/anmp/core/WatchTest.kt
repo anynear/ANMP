@@ -44,6 +44,16 @@ class WatchTest {
         assertTrue(found.any { it.mid == direct.mid && it.text == "direkt" }, "wake: ${found.map { it.text }}")
         // A second wake-up does not report the same message again.
         assertEquals(emptyList(), nse.wakeFetch().filterIsInstance<CoreEvent.Message>().filter { it.mid == direct.mid })
+        // Nothing new, and every space answered: the wake-up had nothing to show (ADR 0117).
+        val again = nse.wakeFetchResult()
+        assertTrue(again.complete)
+        assertEquals(emptyList(), again.events.filterIsInstance<CoreEvent.Message>())
+        // No relay answers: also nothing found, but not complete, a message may be waiting.
+        net.relays.forEach { it.offline = true }
+        val offline = nse.wakeFetchResult()
+        assertEquals(false, offline.complete)
+        assertEquals(emptyList(), offline.events)
+        net.relays.forEach { it.offline = false }
     }
 
     @Test
@@ -152,7 +162,7 @@ class WatchTest {
     fun oneWakeUpPerMailboxForAPersonWithTwoDevices() = world {
         val phone = device("Anna")
         val ben = device("Ben")
-        assertIs<AddContactResult.Added>(ben.core.addContact(phone.core.ownContactLink()))
+        assertIs<AddContactResult.Added>(agreeContact(ben.core, phone.core))
         eventually { phone.core.canWriteTo(ben.deviceId) && ben.core.canWriteTo(phone.deviceId) }
         val tablet = addTablet(phone)
         eventually { ben.core.membersOf(MemberState.CONTACTS).any { it.deviceId == tablet.deviceId } }

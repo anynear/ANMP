@@ -169,7 +169,7 @@ class RadioWayTest {
         val b = device("Ben")
         val c = device("Clara")
         val circle = circleOf(a, b, c)
-        b.core.addContact(a.core.ownContactLink())
+        b.core.addContact(a.core.ownContactLink()) // circle members need no request (ADR 0116)
         a.await<CoreEvent.MemberUpdated>(30.seconds) { it.member.deviceId == b.deviceId && it.member.circleId == MemberState.CONTACTS }
         val before = assertNotNull(b.core.circle(circle.id))
         a.core.removeMember(circle.id, b.deviceId)
@@ -198,7 +198,7 @@ class RadioWayTest {
     fun directMessageGetsReceiptAndRead() = world {
         val a = device("Anna")
         val b = device("Ben")
-        b.core.addContact(a.core.ownContactLink())
+        agreeContact(b.core, a.core)
         a.await<CoreEvent.MemberUpdated>(30.seconds) { it.member.deviceId == b.deviceId && it.member.circleId == MemberState.CONTACTS }
         val air = FakeAir()
         a.radio(air)
@@ -230,7 +230,7 @@ class RadioWayTest {
     fun radioMessageTellsTheSendersNode() = world {
         val a = device("Anna")
         val b = device("Ben")
-        b.core.addContact(a.core.ownContactLink())
+        agreeContact(b.core, a.core)
         a.await<CoreEvent.MemberUpdated>(30.seconds) { it.member.deviceId == b.deviceId && it.member.circleId == MemberState.CONTACTS }
         b.await<CoreEvent.MemberUpdated>(30.seconds) { it.member.deviceId == a.deviceId }
         // Anna's radio changes without internet: only the radio packet can tell Ben (ADR 0058).
@@ -422,7 +422,7 @@ class RadioWayTest {
     fun receiptsWaitForTheRadioAndGoTogether() = world {
         val a = device("Anna")
         val b = device("Ben")
-        b.core.addContact(a.core.ownContactLink())
+        agreeContact(b.core, a.core)
         a.await<CoreEvent.MemberUpdated>(30.seconds) { it.member.deviceId == b.deviceId && it.member.circleId == MemberState.CONTACTS }
         val air = FakeAir()
         a.radio(air)
@@ -449,8 +449,8 @@ class RadioWayTest {
         val a = device("Anna")
         val b = device("Ben")
         val c = device("Carl")
-        b.core.addContact(a.core.ownContactLink())
-        c.core.addContact(a.core.ownContactLink())
+        agreeContact(b.core, a.core)
+        agreeContact(c.core, a.core)
         a.await<CoreEvent.MemberUpdated>(30.seconds) { it.member.deviceId == b.deviceId && it.member.circleId == MemberState.CONTACTS }
         a.await<CoreEvent.MemberUpdated>(30.seconds) { it.member.deviceId == c.deviceId && it.member.circleId == MemberState.CONTACTS }
         val air = FakeAir()
@@ -476,7 +476,7 @@ class RadioWayTest {
         val tablet = addTablet(phone)
         eventually { tablet.core.ownDevices.value.size == 2 }
         val ben = device("Ben")
-        ben.core.addContact(phone.core.ownContactLink())
+        agreeContact(ben.core, phone.core)
         eventually { ben.core.membersOf(MemberState.CONTACTS).count { it.person == phone.info.personId } == 2 }
         eventually { phone.core.membersOf(MemberState.CONTACTS).any { it.person == ben.info.personId } }
         eventually { tablet.core.membersOf(MemberState.CONTACTS).any { it.person == ben.info.personId } }
@@ -502,7 +502,7 @@ class RadioWayTest {
         val tablet = addTablet(phone)
         eventually { tablet.core.ownDevices.value.size == 2 }
         val ben = device("Ben")
-        ben.core.addContact(phone.core.ownContactLink())
+        agreeContact(ben.core, phone.core)
         eventually { ben.core.membersOf(MemberState.CONTACTS).count { it.person == phone.info.personId } == 2 }
         eventually { phone.core.membersOf(MemberState.CONTACTS).any { it.person == ben.info.personId } }
         eventually { tablet.core.membersOf(MemberState.CONTACTS).any { it.person == ben.info.personId } }
@@ -548,7 +548,7 @@ class RadioWayTest {
     fun waitingMessageGoesAgainWhenTheTargetsAppIsHeard() = world {
         val a = device("Anna")
         val b = device("Ben")
-        b.core.addContact(a.core.ownContactLink())
+        agreeContact(b.core, a.core)
         a.await<CoreEvent.MemberUpdated>(30.seconds) { it.member.deviceId == b.deviceId && it.member.circleId == MemberState.CONTACTS }
         b.await<CoreEvent.MemberUpdated>(30.seconds) { it.member.deviceId == a.deviceId }
         val air = FakeAir()
@@ -579,7 +579,7 @@ class RadioWayTest {
     fun waitingMessageGoesAgainOnAnAnsweredRadioCheckButNotTooOften() = world {
         val a = device("Anna")
         val b = device("Ben")
-        b.core.addContact(a.core.ownContactLink())
+        agreeContact(b.core, a.core)
         a.await<CoreEvent.MemberUpdated>(30.seconds) { it.member.deviceId == b.deviceId && it.member.circleId == MemberState.CONTACTS }
         val air = FakeAir()
         val ra = air.radio(a.name)

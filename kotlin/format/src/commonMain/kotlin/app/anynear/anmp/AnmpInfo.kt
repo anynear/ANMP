@@ -125,6 +125,9 @@ object AnmpInfo {
     const val VAULT_AEAD = "anmp/v1/vault-aead"
 
     /** Store secret → Ed25519 seed of the profile space: name, picture and settings of the person (ADR 0050). */
+    /** Signing domain of an introduction card (ADR 0116). */
+    const val INTRO = "anmp/v1/intro"
+
     const val PROFILE_SIGN = "anmp/v1/profile-sign"
 
     /** Store secret → AES-256-GCM key of the profile space entry; also its associated data. */

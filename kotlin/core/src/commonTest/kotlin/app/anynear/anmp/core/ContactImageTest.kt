@@ -16,7 +16,7 @@ class ContactImageTest {
         val a = device("Anna"); val b = device("Ben")
         val picture = ByteArray(4000) { 5 }
         a.core.setOwnImage(picture)
-        b.core.addContact(a.core.ownContactLink())
+        agreeContact(b.core, a.core)
         b.sees(a, picture)
     }
 
@@ -25,14 +25,14 @@ class ContactImageTest {
         val a = device("Anna"); val b = device("Ben")
         val picture = ByteArray(4000) { 6 }
         b.core.setOwnImage(picture)
-        b.core.addContact(a.core.ownContactLink())
+        agreeContact(b.core, a.core)
         a.sees(b, picture)
     }
 
     @Test
     fun linkOwnerPictureSetAfter() = world {
         val a = device("Anna"); val b = device("Ben")
-        b.core.addContact(a.core.ownContactLink())
+        agreeContact(b.core, a.core)
         eventually { a.core.canWriteTo(b.deviceId) && b.core.canWriteTo(a.deviceId) }
         val picture = ByteArray(4000) { 7 }
         a.core.setOwnImage(picture)
@@ -42,7 +42,7 @@ class ContactImageTest {
     @Test
     fun linkUserPictureSetAfter() = world {
         val a = device("Anna"); val b = device("Ben")
-        b.core.addContact(a.core.ownContactLink())
+        agreeContact(b.core, a.core)
         eventually { a.core.canWriteTo(b.deviceId) && b.core.canWriteTo(a.deviceId) }
         val picture = ByteArray(4000) { 8 }
         b.core.setOwnImage(picture)

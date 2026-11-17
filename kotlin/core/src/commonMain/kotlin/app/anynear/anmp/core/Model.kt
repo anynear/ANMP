@@ -211,6 +211,53 @@ internal data class CoreState(
     val alive: List<AlivePlan> = emptyList(),
     /** Persons whose mailbox refuses us (every holder 403), with since when (ms): person ID → time (ADR 0046). */
     val unreachable: Map<String, Long> = emptyMap(),
+    /** Persons asking to become a contact (ADR 0116), not yet answered. */
+    val requests: List<ContactRequest> = emptyList(),
+    /** Persons we asked to become a contact (contact link or introduction, ADR 0116), until they agree or [SentRequest.until]. */
+    val sentRequests: List<SentRequest> = emptyList(),
+)
+
+/**
+ * A person that asks to become a contact (ADR 0116): through our contact link, or introduced by the contact
+ * [introducedBy] (person ID, named [introducedByName]). Nothing is added and no grant issued before [AnmpCore.acceptContactRequest].
+ * [person]: person ID, or the device ID while its app sends no key chain. [ts], [until] in ms.
+ */
+@JsExport
+@Serializable
+data class ContactRequest(
+    val person: String,
+    val deviceId: String,
+    val name: String,
+    val publicKey: String,
+    val signKey: String? = null,
+    val inbox: String? = null,
+    /** Write grant for [inbox] (b64u of CBOR `[body, sig]`) from its packet or contact link. */
+    val grant: String? = null,
+    val mailboxKey: String? = null,
+    val node: Long = 0,
+    val image: ImageRef? = null,
+    val imageTs: Long = 0,
+    val introducedBy: String? = null,
+    val introducedByName: String? = null,
+    /** ID of the introduction (b64u), so that a forwarded request is taken once. */
+    val introId: String? = null,
+    val ts: Long = 0,
+    val until: Long = 0,
+)
+
+/**
+ * A request of ours (ADR 0116): we added [name] through its link (then [deviceId] is its device) or accepted an
+ * introduction of it by [introducedBy]. Ends when something of the person arrives, or silently at [until] (ms).
+ */
+@JsExport
+@Serializable
+data class SentRequest(
+    val person: String,
+    val name: String,
+    val deviceId: String? = null,
+    val introducedBy: String? = null,
+    val ts: Long = 0,
+    val until: Long = 0,
 )
 
 /** A device of a person: device ID, name, time added (ms), radio node (ADR 0042). */
@@ -337,6 +384,9 @@ sealed class AddContactResult {
 
     data class AlreadyKnown(val contact: MemberState) : AddContactResult()
 
+    /** An introduction was accepted (ADR 0116): the introduced person [name] still has to agree. */
+    data class Requested(val name: String) : AddContactResult()
+
     /** Same device ID, other key: not taken over silently. */
     data class KeyMismatch(val name: String) : AddContactResult()
 
@@ -385,3 +435,12 @@ data class StreamStats(
     val missed: Int = 0,
     val lastSeconds: List<Long> = emptyList(),
 )
+
+/**
+ * A contact introduced in a message (ADR 0116 §2): the person [person] named [name], introduced by [byPerson], valid
+ * until [until] (ms). [card]: the signed card (b64u) to hand to [AnmpCore.acceptIntro]. [image]: its picture, in the
+ * space of the message.
+ */
+@JsExport
+@Serializable
+data class Intro(val id: String, val person: String, val name: String, val byPerson: String, val until: Long, val card: String, val image: app.anynear.anmp.AnmpAttachment? = null)

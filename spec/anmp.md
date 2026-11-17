@@ -126,6 +126,10 @@ All fields are optional; which are set depends on the kind.
 | 35 | alive | alive | sign of life (kind alive, ADR 0083 §5) | yes |
 | 36 | care | care | answer of a helper to a sign of life (kind care, ADR 0083 §4) | yes |
 | 37 | author | bstr 16 | device ID of the original sender in an own copy of a received direct, react or delete (ADR 0107) | no |
+| 38 | passedOn | `true` | the sender passed on a message it got (ADR 0118); missing = not passed on | no |
+| 39 | ask | bool | in `profile`: the sender asks to become a contact (ADR 0116 §7) | no |
+| 40 | intro | intro | in `direct`: a contact introduced to the reader (ADR 0116 §2) | no |
+| 41 | introReply | intro-reply | in `direct` without text: wants the introduced contact (to the introducer), or the request passed on (to the introduced person) (ADR 0116 §3) | no |
 
 Structures (see CDDL for types):
 
@@ -135,6 +139,9 @@ Structures (see CDDL for types):
 | | `file` (any other file, ADR 0041): unchanged bytes, field 3 name required (the receiver derives the media type from its extension); readers that do not know a type drop that attachment and keep the message |
 | image | 0 id (blob ID, 32) · 1 key 32 · 2 from (space that holds the blob, 32) · 3 hash 16? |
 | link | 0 url (`https://`, must appear in field 2, otherwise readers ignore the preview) · 1 title? (≤ 120) · 2 description? (≤ 200) · 3 site? (≤ 120) · 4 image? (attachment of type `jpg`, in the space of the message, not counted towards the attachment limit) |
+| intro | 0 card (CBOR `[body, sig]` of intro-card, sig by the person key of `by` over `anmp/v1/intro\n` ‖ body) · 1 image? (attachment of type `jpg`, the picture of the introduced person, in the space of the message) |
+| intro-card | 0 id 16 · 1 until s · 2 person (introduced, person ID 16) · 3 name (its own, ≤ 40) · 4 to (person ID 16) · 5 by (introducer, person ID 16) |
+| intro-reply | 0 card (the signed card answered) · 1 contact (contact link `https://…/c#…` of the person `to`) |
 | meta | 0 name · 1 nameTs ms · 2 nameBy 16 · 3 image? · 4 imageTs ms · 5 imageBy 16 |
 | alive | 0 plan (ID 8) · 1 state · 2 start s · 3 until s · 4 due s · 5 hint s · 6 alarm s · 7 quiet s · 8 motion? · 9 label (≤ 40)? · 10 battery %? |
 | care | 0 plan (ID 8) · 1 state (1 looking, 2 away, 3 back) |
@@ -142,7 +149,8 @@ Structures (see CDDL for types):
 | part | 0 id (blob ID, 32) · 1 key 32 · 2 from (space, 32) · 3 SHA-256 of the plaintext 32 · 4 delete token 32? (pre-ANDP, no longer written) · 5 grant? (ANDP delete grant scoped to the part) |
 | rekey | 0 key 32 · 1 epoch · 2 removed device 16? · 3 why (`remove`/`reset`/`left`/`device`)? · 4 circle? · 5 ts ms? |
 | removed | 0 epoch · 1 circle? · 2 ts ms? |
-| sync | 0 ts ms · 1 name? · 2 [* sync-circle] · 3 [* sync-contact] · 4 [* gone] · 5 [* sync-channel]? |
+| sync | 0 ts ms · 1 name? · 2 [* sync-circle] · 3 [* sync-contact] · 4 [* gone] · 5 [* sync-channel]? · 6 [* sync-asked]? |
+| sync-asked | 0 person (person ID, or device ID from a contact link) · 1 name · 2 device? · 3 by (introducer)? · 4 ts ms · 5 until ms (ADR 0116) |
 | sync-circle | 0 id · 1 name · 2 secret 32 · 3 epoch? · 4 epochTs ms? · 5 epochBy 16? |
 | sync-contact | 0 name · 1 signKey 32 · 2 key 32 · 3 inbox 32? · 4 person proof? |
 | gone | 0 id (circle ID, person ID or channel ID) · 1 ts ms |
@@ -180,6 +188,11 @@ in alive and care.
   "message not available" if they do not have it. Over radio the reference goes along only if the packet still fits
   with it, before field 10; the text budget below stays the same. Readers that do not know answers show the message
   without it.
+- **Passed on (ADR 0118):** a circle or direct message (and its own copies) whose content the sender took from another
+  message carries field 38 = `true`. It names no origin: no original sender, conversation or time. Attachments are
+  sealed again with a new key and stored in the new space like any attachment (no references across spaces). Not over
+  radio; a reader that gets the same message ID later over the internet takes the mark. Readers that do not know the
+  field show the message without it.
 - **Path in receipts:** a receipt says in field 32 on which path the messages arrived at the receiver, independent of
   the path the receipt itself takes. A receiver sends one receipt per path a message arrives on; the sender joins the
   bits. Receipts without field 32 say nothing about the path.
@@ -692,6 +705,34 @@ compare.
   owner with the current time**, because ANDP §3 rule 5 accepts client writes only within 300 s of `ts`, so the
   original signature of an older object cannot be reused by a client.
 
+### Contact requests (ADR 0116)
+
+Nobody becomes a contact without the consent of the person asked.
+
+- **Stranger:** a `direct` or `profile` in the personal mailbox from a person that is neither a contact nor a circle
+  member becomes a **request**: the reader keeps name, keys, mailbox, grant and picture, adds nothing and issues no
+  grant; messages are reported (to show with the request), no receipt is sent. Exceptions: the sender wrote with the
+  grant of a published contact link (support, ADR 0084 §6), or the reader asked the sender itself (below); both are
+  taken as contact at once as before.
+- **Contact link:** whoever adds a contact link adds the device as before, but sends its `profile` with field 39 `ask`
+  and keeps a **sent request** for 30 days. It ends when a `direct` or `profile` of the person arrives, or silently at
+  its time (the device is then forgotten again). Older readers ignore field 39 and add at once as before.
+- **Agree:** the reader adds the person like a contact link (grant from the request, `profile` with a personal grant).
+  **Decline:** silent; a tombstone `declined:<person ID>` in the snapshot (`gone`) makes the own other devices drop it,
+  and further requests of the person are dropped while the tombstone lasts.
+- **Introduction:** A introduces its contact C to its contact B: a `direct` to B with field 40 (card signed by A's
+  current person key: ID, until = now + 30 days, C's person ID and own name, B's person ID, A's person ID; picture
+  optional) and a text as stand-in. B checks the signature against A's chain, `to` = own person, not expired. If B
+  wants C, B sends A a `direct` without text with field 41 (the card, B's contact link) and keeps a sent request for C
+  (person ID). Every device of A that opens it checks the card (signed by the own person key, sender is `to`, not
+  expired, C still a contact) and passes field 41 on to C in a `direct` without text. C checks the card against A's
+  chain (sender is `by`, `person` = own person, not expired, A a contact), parses the contact link and keeps a request
+  of B naming A (one per card ID). On agreement C adds B from the link; C's `profile` reaches B, whose sent request
+  for C's person lets it in as contact.
+- **Own devices:** sent requests go along in the snapshot (`sync` field 6). A device that holds a request from a person
+  its own person asked (a snapshot that came later) takes it as contact at once; a device lists a request only while
+  the person is neither a contact nor asked by the own person.
+
 ### Links
 
 Links people share live on `anynear.app` (ADR 0061 decision 4). The core creates them there and also reads the same
@@ -711,7 +752,10 @@ integer keys (same encoding rules as packets):
 | 6 | epoch time (ms) | 6 | link grant (bstr, CBOR `[body, sig]`) |
 | 7 | epoch device (bstr 16)? | 7 | radio contact (bstr, app-defined)? |
 | 8 | radio contact of the inviter (bstr, app-defined)? | 8 | mailbox recipient X25519 key (bstr 32)? (ADR 0084) |
+| 9 | name of the inviter (tstr, ≤ 40)? | | |
 
+Field 9 of an invitation lets the app ask „Join … ? Invited by …“ before anything is stored; it is the
+creator's profile name when the link was made, omitted when blank, and readers take an absent field as `""`.
 The channel name follows from the circle ID. A reader refuses links of another network ID; they never make it
 contact relays of another network (ADR 0035 §6). The network list comes from the built-in or saved list or, as a
 starting point, from `https://anynear.net/andp/v1/net`; it is accepted only for the configured network ID and key

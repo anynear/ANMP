@@ -32,6 +32,8 @@ class Invite(
     val epochBy: String,
     /** Opaque radio contact of the inviter (app-defined, e.g. Meshtastic `SharedContact`). */
     val radio: ByteArray?,
+    /** Name of whoever created the link, for „Eingeladen von …“; `""` in links of older apps. */
+    val inviter: String = "",
 )
 
 /** Decoded contact link (`https://anynear.app/c#…`). Only public data; the grant lets the reader write into [inbox]. */
@@ -89,6 +91,7 @@ object AnmpLinks {
         @CborLabel(6) val epochTs: Long = 0,
         @CborLabel(7) val epochBy: ByteArray? = null,
         @CborLabel(8) val radio: ByteArray? = null,
+        @CborLabel(9) val inviter: String? = null,
     )
 
     @Serializable
@@ -142,6 +145,7 @@ object AnmpLinks {
         val wire = InviteWire(
             VERSION, B64.decode(invite.networkId), invite.circleId, invite.name.take(MAX_NAME), B64.decode(invite.secret),
             invite.epoch, invite.epochTs, invite.epochBy.takeIf { it.isNotEmpty() }?.let { B64.decode(it) }, invite.radio,
+            invite.inviter.trim().take(MAX_NAME).takeIf { it.isNotEmpty() },
         )
         return "https://$host/k#" + B64.encode(coreCbor.encodeToByteArray(InviteWire.serializer(), wire))
     }
@@ -159,7 +163,9 @@ object AnmpLinks {
         val w = fragment(text, host, "k")?.let { runCatching { coreCbor.decodeFromByteArray(InviteWire.serializer(), it) }.getOrNull() } ?: return null
         if (w.v != VERSION || w.network.size != Hash.SIZE || w.secret.size != 32 || w.id.isEmpty() || w.id.length > 64) return null
         if (w.epoch < 0 || (w.epochBy != null && w.epochBy.size != 16)) return null
-        return Invite(B64.encode(w.network), w.id, w.name.trim().take(MAX_NAME), B64.encode(w.secret), w.epoch, w.epochTs, w.epochBy?.let(B64::encode).orEmpty(), w.radio)
+        return Invite(B64.encode(w.network), w.id, w.name.trim().take(MAX_NAME), B64.encode(w.secret), w.epoch, w.epochTs, w.epochBy?.let(B64::encode).orEmpty(), w.radio,
+            w.inviter.orEmpty().trim().take(MAX_NAME),
+        )
     }
 
     /** Reads a contact link. The grant must be a structurally valid grant for the given inbox (signature checked by [AnmpCore]). */
@@ -200,6 +206,8 @@ class LinkPreview(
     val target: String? = null,
     /** Channel: the owner will see who subscribes (ADR 0062 §11). */
     val seenByOwner: Boolean = false,
+    /** Circle: name of whoever created the invitation; `""` if the link does not say. */
+    val inviter: String = "",
 ) {
     companion object {
         const val CIRCLE = "circle"

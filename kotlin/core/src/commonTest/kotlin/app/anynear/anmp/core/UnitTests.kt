@@ -29,7 +29,7 @@ class LinksTest {
 
     @Test
     fun inviteRoundTrip() {
-        val invite = Invite(network, "c1", "Familie Müller 👨‍👩‍👧", B64.encode(ByteArray(32) { 2 }), 3, 1761200000000, B64.encode(ByteArray(16) { 4 }), byteArrayOf(9, 9))
+        val invite = Invite(network, "c1", "Familie Müller 👨‍👩‍👧", B64.encode(ByteArray(32) { 2 }), 3, 1761200000000, B64.encode(ByteArray(16) { 4 }), byteArrayOf(9, 9), "Anna")
         val link = AnmpLinks.inviteLink("anynear.app", invite)
         assertTrue(link.startsWith("https://anynear.app/k#"))
         val back = assertNotNull(AnmpLinks.parseInvite("Tritt bei: $link !", "anynear.app"))
@@ -40,10 +40,20 @@ class LinksTest {
         assertEquals(invite.epochBy, back.epochBy)
         assertEquals(network, back.networkId)
         assertContentEquals(byteArrayOf(9, 9), back.radio)
+        assertEquals("Anna", back.inviter)
         // Another host, truncated fragment or another version: no invitation.
         assertNull(AnmpLinks.parseInvite(link.replace("anynear.net", "example.org"), "anynear.net"))
         assertNull(AnmpLinks.parseInvite(link.dropLast(10), "anynear.net"))
         assertNull(AnmpLinks.parseInvite("https://anynear.app/k#abc", "anynear.net"))
+    }
+
+    @Test
+    fun inviteWithoutInviterReadsAsEmpty() {
+        // Links of older apps have no field 9; a blank name is left out of the link.
+        val old = Invite(network, "c1", "Familie", B64.encode(ByteArray(32) { 2 }), 0, 0, "", null)
+        assertEquals("", assertNotNull(AnmpLinks.parseInvite(AnmpLinks.inviteLink("anynear.app", old), "anynear.app")).inviter)
+        val blank = Invite(network, "c1", "Familie", B64.encode(ByteArray(32) { 2 }), 0, 0, "", null, "  ")
+        assertEquals(AnmpLinks.inviteLink("anynear.app", old), AnmpLinks.inviteLink("anynear.app", blank))
     }
 
     @Test

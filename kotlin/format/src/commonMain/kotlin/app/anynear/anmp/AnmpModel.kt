@@ -226,6 +226,17 @@ class AnmpContent(
      * a received message written into the own mailbox by an own device (migrated, or heard only over radio).
      */
     @CborLabel(37) val author: ByteArray? = null,
+    /**
+     * The sender passed on a message it got („Weiterleiten“, ADR 0118); only written as `true`, without any origin.
+     * Circle and direct messages, internet only.
+     */
+    @CborLabel(38) val passedOn: Boolean? = null,
+    /** In a profile: the sender asks to become a contact (ADR 0116 §7); the reader decides, nothing is added before. */
+    @CborLabel(39) val ask: Boolean? = null,
+    /** In a direct message: a contact introduced to the reader (ADR 0116 §2). */
+    @CborLabel(40) val intro: AnmpIntro? = null,
+    /** In a direct message: the reader of an introduction wants the contact (to the introducer), or the forwarded request (to the introduced person) (ADR 0116 §3). */
+    @CborLabel(41) val introReply: AnmpIntroReply? = null,
 ) {
     /**
      * This content as an own copy in the conversation with the person [peer] (person ID, content 26), written by the own
@@ -272,8 +283,46 @@ class AnmpContent(
         alive = alive,
         care = care,
         author = author,
+        passedOn = passedOn,
+        ask = ask,
+        intro = intro,
+        introReply = introReply,
     )
 }
+
+/**
+ * Body of an introduction (ADR 0116 §2), signed by the person key of [by]: the person [person] (named [name], as it calls
+ * itself) is introduced to the person [to]. [id]: 16 random bytes; [until]: seconds since 1970. No mailbox, device or key
+ * of [person]: the reader cannot reach it with this.
+ */
+@JsExport
+@Serializable
+class AnmpIntroCard(
+    @CborLabel(0) val id: ByteArray,
+    @CborLabel(1) val until: Long,
+    @CborLabel(2) val person: ByteArray,
+    @CborLabel(3) val name: String,
+    @CborLabel(4) val to: ByteArray,
+    @CborLabel(5) val by: ByteArray,
+)
+
+
+@JsExport
+@Serializable
+class AnmpIntroReply(
+    /** The signed card ([AnmpIntro.card]) this answers. */
+    @CborLabel(0) val card: ByteArray,
+    /** Contact link (`https://…/c#…`) of the person that wants the contact, the introduced person adds it on „Zustimmen“. */
+    @CborLabel(1) val contact: String,
+)
+
+/** Introduction in a direct message: [card] = CBOR `[body, sig]` of [AnmpIntroCard] ([AnmpIntros]); [image]: picture of the introduced person (`jpg`, in the space of the message). */
+@JsExport
+@Serializable
+class AnmpIntro(
+    @CborLabel(0) val card: ByteArray,
+    @CborLabel(1) val image: AnmpAttachment? = null,
+)
 
 /**
  * Sign of life (ADR 0083 §5) of the sender's person, in a circle it chose. Every packet carries the whole plan, so a helper

@@ -58,7 +58,7 @@ class ContactFlowTest {
         val b = device("Ben")
         val link = a.core.ownContactLink()
         assertTrue(link.startsWith("https://anynear.app/c#"))
-        val added = assertIs<AddContactResult.Added>(b.core.addContact(link))
+        val added = assertIs<AddContactResult.Added>(agreeContact(b.core, a.core, link))
         assertEquals(a.deviceId, added.contact.deviceId)
         assertTrue(b.core.canWriteTo(a.deviceId))
 
@@ -88,7 +88,7 @@ class ContactFlowTest {
     fun knownRadioNodeSurvivesPacketsWithoutNode() = world {
         val a = device("Anna")
         val b = device("Ben")
-        b.core.addContact(a.core.ownContactLink())
+        agreeContact(b.core, a.core)
         b.core.setProfile("Ben", node = 1234)
         val first = assertNotNull(b.core.sendDirect(a.deviceId, "mit Funk"))
         a.await<CoreEvent.Message> { it.mid == first.mid }
@@ -105,7 +105,7 @@ class ContactFlowTest {
     fun settingsBeforeStartDoNotWipeTheState() = world {
         val a = device("Anna")
         val b = device("Ben")
-        b.core.addContact(a.core.ownContactLink())
+        agreeContact(b.core, a.core)
         eventually { b.core.membersOf(MemberState.CONTACTS).any { it.deviceId == a.deviceId } }
         b.core.stop()
 

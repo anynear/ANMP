@@ -105,6 +105,23 @@ class AnmpSync(
     @CborLabel(3) val contacts: List<AnmpSyncContact> = emptyList(),
     @CborLabel(4) val gone: List<AnmpSyncGone> = emptyList(),
     @CborLabel(5) val channels: List<AnmpSyncChannel> = emptyList(),
+    /** Contact requests the person sent and that are not answered yet (ADR 0116), so every own device lets the answer in. */
+    @CborLabel(6) val asked: List<AnmpSyncAsked> = emptyList(),
+)
+
+/**
+ * A contact request of the own person (ADR 0116): to [person] (person ID, or device ID for a request through a contact
+ * link before its chain is known), named [name], [device] from the contact link, [by] the introducer, [ts] and [until] in ms.
+ */
+@JsExport
+@Serializable
+class AnmpSyncAsked(
+    @CborLabel(0) val person: String,
+    @CborLabel(1) val name: String,
+    @CborLabel(2) val device: String? = null,
+    @CborLabel(3) val by: String? = null,
+    @CborLabel(4) val ts: Long = 0,
+    @CborLabel(5) val until: Long = 0,
 )
 
 /** A circle as in the invitation link: ID, name, secret, key epoch with time (ms) and device. */
@@ -274,7 +291,7 @@ object AnmpPersons {
     private suspend fun sign(signer: AnmpSigner, domain: String, body: ByteArray): ByteArray {
         val sig = signer.sign(signingBytes(domain, body))
         require(sig.size == Anmp.SIGNATURE_BYTES) { "signature must have ${Anmp.SIGNATURE_BYTES} bytes" }
-        return Anmp.cbor.encodeToByteArray(Signed.serializer(), Signed(body, sig))
+        return Anmp.cbor.encodeToByteArray(AnmpPersons.Signed.serializer(), AnmpPersons.Signed(body, sig))
     }
 
     private fun signed(bytes: ByteArray): Signed? =
@@ -294,4 +311,34 @@ object AnmpPersons {
         @CborLabel(0) val cert: ByteArray,
         @CborLabel(1) val list: ByteArray,
     )
+}
+
+/** Introduction cards (ADR 0116 §2): signed by the person key of the introducer, CBOR `[body, sig]`, sig over `anmp/v1/intro\n` || body. */
+@JsExport
+object AnmpIntros {
+    /** Lifetime of an introduction: like the grant of a contact link. */
+    const val LIFETIME_SECONDS: Long = 30L * 24 * 3600
+
+    @JsExport.Ignore
+    suspend fun sign(person: AnmpSigner, card: AnmpIntroCard): ByteArray {
+        val body = Anmp.cbor.encodeToByteArray(AnmpIntroCard.serializer(), card)
+        val sig = person.sign(AnmpPersons.signingBytes(AnmpInfo.INTRO, body))
+        return Anmp.cbor.encodeToByteArray(AnmpPersons.Signed.serializer(), AnmpPersons.Signed(body, sig))
+    }
+
+    /** The card of [signed] if the signature holds for the person key [personKey] (32 bytes) and the IDs have their sizes. */
+    suspend fun verify(signed: ByteArray, personKey: ByteArray): AnmpIntroCard? {
+        val card = read(signed) ?: return null
+        val s = runCatching { Anmp.cbor.decodeFromByteArray(AnmpPersons.Signed.serializer(), signed) }.getOrNull() ?: return null
+        return card.takeIf { AnmpCrypto.edVerify(personKey, AnmpPersons.signingBytes(AnmpInfo.INTRO, s.body), s.sig) }
+    }
+
+    /** The card of [signed] without checking the signature (to show it); `null` if malformed. */
+    fun read(signed: ByteArray): AnmpIntroCard? {
+        val s = runCatching { Anmp.cbor.decodeFromByteArray(AnmpPersons.Signed.serializer(), signed) }.getOrNull() ?: return null
+        val c = runCatching { Anmp.cbor.decodeFromByteArray(AnmpIntroCard.serializer(), s.body) }.getOrNull() ?: return null
+        if (c.id.size != Anmp.DEVICE_BYTES || c.person.size != Anmp.DEVICE_BYTES || c.to.size != Anmp.DEVICE_BYTES || c.by.size != Anmp.DEVICE_BYTES) return null
+        if (c.name.isBlank() || c.name.length > 40 || s.sig.size != 64) return null
+        return c
+    }
 }

@@ -45,6 +45,27 @@ class AliveFlowTest {
     }
 
     @Test
+    fun theNotificationExtensionOfTheHelperSeesTheStart() = world {
+        val (a, b, circle) = pair()
+        // Ben's iPhone is locked: only the notification extension runs (ADR 0117).
+        b.core.stop()
+        val nse = AnmpCore(scope, net.config(), AnmpPlatform(b.secrets, b.store, b.blobs, connector = net.connector))
+        nse.open()
+        val now = CoreClock.SYSTEM.nowMillis()
+        val plan = assertNotNull(a.core.startAlive(circle.id, "Unterwegs", until = now + 3_600_000L, quiet = AliveLogic.MIN_QUIET))
+        val found = mutableListOf<CoreEvent.AliveWake>()
+        eventually { found += nse.wakeFetch().filterIsInstance<CoreEvent.AliveWake>(); found.isNotEmpty() }
+        val wake = found.single()
+        assertEquals(circle.id, wake.circleId)
+        assertEquals(a.info.personId, wake.owner)
+        assertEquals(AnmpAliveState.START, wake.alive.state)
+        assertEquals("Unterwegs", wake.alive.label)
+        assertEquals(plan.id, app.anynear.andp.B64.encode(wake.alive.plan))
+        // The extension stores nothing: the plan is not known to the core yet.
+        assertNull(nse.aliveStatus(plan.id))
+    }
+
+    @Test
     fun theHelperLearnsThePlanAndTheOwnerSeesThatItArrived() = world {
         val (a, b, circle) = pair()
         val now = CoreClock.SYSTEM.nowMillis()

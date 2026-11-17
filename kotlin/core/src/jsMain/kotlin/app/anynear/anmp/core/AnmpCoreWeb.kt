@@ -115,6 +115,7 @@ class WebAddContact(val status: String, val peer: String?) {
         fun of(result: AddContactResult): WebAddContact = when (result) {
             is AddContactResult.Added -> WebAddContact("added", result.contact.person)
             is AddContactResult.AlreadyKnown -> WebAddContact("known", result.contact.person)
+            is AddContactResult.Requested -> WebAddContact("requested", null)
             is AddContactResult.KeyMismatch -> WebAddContact("mismatch", null)
             AddContactResult.Own -> WebAddContact("own", null)
             AddContactResult.ForeignNetwork -> WebAddContact("foreign", null)
@@ -372,6 +373,25 @@ class AnmpCoreWeb private constructor(private val core: AnmpCore, private val ho
     /** Like [addContact], also with the person ID of the added or known contact, e.g. to write to it at once. */
     fun addContactPeer(link: String): Promise<WebAddContact> = GlobalScope.promise { WebAddContact.of(core.addContact(link)) }
 
+    /** Persons asking to become a contact (ADR 0116), newest first. */
+    fun contactRequests(): Promise<Array<ContactRequest>> = GlobalScope.promise { core.contactRequests().toTypedArray() }
+
+    /** Our requests not yet answered (ADR 0116): „Anfrage gesendet“. */
+    fun sentContactRequests(): Promise<Array<SentRequest>> = GlobalScope.promise { core.sentContactRequests().toTypedArray() }
+
+    /** Agrees to the request of [person] (ADR 0116). */
+    fun acceptContactRequest(person: String): Promise<Boolean> = GlobalScope.promise { core.acceptContactRequest(person) }
+
+    /** Declines the request of [person] silently (ADR 0116 §4). */
+    fun declineContactRequest(person: String): Promise<Unit> = GlobalScope.promise { core.declineContactRequest(person) }
+
+    /** Introduces the contact [person] to the contact [toPerson] (ADR 0116); resolves to the message ID or `null`. */
+    fun introduce(person: String, toPerson: String, text: String, image: PreparedAttachment?): Promise<String?> =
+        GlobalScope.promise { core.introduce(person, toPerson, text, image)?.mid }
+
+    /** We want the contact of [intro] (ADR 0116): resolves like [addContact], or `requested`. */
+    fun acceptIntro(intro: Intro): Promise<String> = GlobalScope.promise { WebAddContact.of(core.acceptIntro(intro)).status }
+
     /**
      * Device ID of a contact link in this network, without adding it; `null` if [link] is not one. Lets the web app
      * recognise a known contact, such as the support identity, before or without adding it.
@@ -391,13 +411,14 @@ class AnmpCoreWeb private constructor(private val core: AnmpCore, private val ho
     /**
      * Resolves to the message ID, `null` if the circle is unknown. [mid]: as in [AnmpCore.sendCircle], `null` = new.
      * [replyTo], [replyFrom]: ID and author tag of the message this answers (ADR 0092), or both `null`.
+     * [passedOn]: the message passes on one the sender got („Weiterleiten“, ADR 0118).
      */
-    fun sendCircle(circleId: String, text: String, mid: String?, attachments: Array<PreparedAttachment>, replyTo: String?, replyFrom: String?): Promise<String?> =
-        GlobalScope.promise { core.sendCircle(circleId, text, attachments.toList(), mid = mid, replyTo = replyTo, replyFrom = replyFrom)?.mid }
+    fun sendCircle(circleId: String, text: String, mid: String?, attachments: Array<PreparedAttachment>, replyTo: String?, replyFrom: String?, passedOn: Boolean): Promise<String?> =
+        GlobalScope.promise { core.sendCircle(circleId, text, attachments.toList(), mid = mid, replyTo = replyTo, replyFrom = replyFrom, passedOn = passedOn)?.mid }
 
     /** Resolves to the message ID, `null` without a grant for the recipient's mailbox. [id]: person or device ID. [replyTo], [replyFrom] as in [sendCircle]. */
-    fun sendDirect(id: String, text: String, mid: String?, attachments: Array<PreparedAttachment>, replyTo: String?, replyFrom: String?): Promise<String?> =
-        GlobalScope.promise { core.sendDirect(id, text, attachments.toList(), mid = mid, replyTo = replyTo, replyFrom = replyFrom)?.mid }
+    fun sendDirect(id: String, text: String, mid: String?, attachments: Array<PreparedAttachment>, replyTo: String?, replyFrom: String?, passedOn: Boolean): Promise<String?> =
+        GlobalScope.promise { core.sendDirect(id, text, attachments.toList(), mid = mid, replyTo = replyTo, replyFrom = replyFrom, passedOn = passedOn)?.mid }
 
     /** Reaction [emoji] (`""` withdraws it) on message [targetMid] of the installation with tag [targetTag] (ADR 0018). */
     fun react(conversation: Conversation, targetTag: String, targetMid: String, emoji: String): Promise<Boolean> =

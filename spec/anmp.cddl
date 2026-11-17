@@ -104,6 +104,10 @@ content = {
   ? 35 => alive,            ; sign of life (ADR 0083 §5); also over radio
   ? 36 => care,             ; answer of a helper (ADR 0083 §4); also over radio
   ? 37 => bstr .size 16,    ; author: original sender device in an own copy of a received packet (ADR 0107)
+  ? 38 => true,             ; passedOn: the sender passed on a message it got, without origin (ADR 0118)
+  ? 39 => bool,             ; ask: a profile that asks to become a contact (ADR 0116 §7)
+  ? 40 => intro,            ; a contact introduced to the reader (ADR 0116 §2)
+  ? 41 => intro-reply,      ; wants the introduced contact / request passed on by the introducer (ADR 0116 §3)
   * int => any,             ; further fields, skipped by older readers
 }
 
@@ -111,6 +115,14 @@ content = {
 ; 8 voice message length ms, 9 text is its automatic transcript (ADR 0030)
 ; 0 url (https, must appear in the text), 1 title, 2 description, 3 site, 4 picture (attachment of type "jpg")
 link = { 0 => tstr, ? 1 => tstr, ? 2 => tstr, ? 3 => tstr, ? 4 => attachment }
+
+; signed card (CBOR [body, sig], sig by the introducer's person key over "anmp/v1/intro\n" || body), picture ("jpg")
+intro       = { 0 => bstr .cbor signed-intro, ? 1 => attachment }
+signed-intro = [bstr .cbor intro-card, bstr .size 64]
+; ID, until (s), introduced person, its own name, person it is introduced to, introducer (person IDs)
+intro-card  = { 0 => bstr .size 16, 1 => uint, 2 => bstr .size 16, 3 => tstr .size (1..160), 4 => bstr .size 16, 5 => bstr .size 16 }
+; the signed card answered, contact link (https://…/c#…) of the person that wants the contact
+intro-reply = { 0 => bstr .cbor signed-intro, 1 => tstr }
 
 attachment = { 0 => blob-id, 1 => bstr .size 32, 2 => "jpg" / "pdf" / "m4a" / "file", ? 3 => tstr, 4 => uint, ? 5 => uint, ? 6 => uint, ? 7 => hash, ? 8 => uint, ? 9 => bool }
 ; blob, blob key, space that holds the blob, content hash
@@ -182,7 +194,9 @@ device-entry = { 0 => bstr .size 32, 1 => bstr .size 32, ? 2 => tstr, ? 3 => uin
 proof        = { 0 => bstr .cbor signed, 1 => bstr .cbor signed }   ; certificate, device list
 
 ; Snapshot for the own other devices (kind sync, ADR 0042): time ms, name, circles, contact devices, gone, channels.
-sync         = { 0 => uint, ? 1 => tstr, ? 2 => [* sync-circle], ? 3 => [* sync-contact], ? 4 => [* gone], ? 5 => [* sync-channel] }
+sync         = { 0 => uint, ? 1 => tstr, ? 2 => [* sync-circle], ? 3 => [* sync-contact], ? 4 => [* gone], ? 5 => [* sync-channel], ? 6 => [* sync-asked] }
+; own contact request not answered yet (ADR 0116): person, name, device, introducer, ts, until (ms)
+sync-asked   = { 0 => tstr, 1 => tstr, ? 2 => tstr, ? 3 => tstr, ? 4 => uint, ? 5 => uint }
 sync-circle  = { 0 => tstr, 1 => tstr, 2 => bstr .size 32, ? 3 => uint, ? 4 => uint, ? 5 => device }
 sync-contact = { 0 => tstr, 1 => bstr .size 32, 2 => bstr .size 32, ? 3 => space, ? 4 => bstr .cbor proof }
 gone         = { 0 => tstr, 1 => uint }       ; circle ID, person ID or channel ID, time ms

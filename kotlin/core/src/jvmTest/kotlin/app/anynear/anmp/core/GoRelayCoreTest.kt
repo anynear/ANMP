@@ -131,7 +131,7 @@ class GoRelayCoreTest {
 
             // Direct through a contact link, both ways.
             val c = node("Clara")
-            assertIs<AddContactResult.Added>(c.core.addContact(a.core.ownContactLink()))
+            assertIs<AddContactResult.Added>(agreeContact(c.core, a.core, timeout = 30.seconds))
             eventually(30.seconds) { a.core.canWriteTo(c.deviceId) }
             val d1 = assertNotNull(c.core.sendDirect(a.deviceId, "Hallo Anna"))
             a.await<CoreEvent.Message> { it.mid == d1.mid }

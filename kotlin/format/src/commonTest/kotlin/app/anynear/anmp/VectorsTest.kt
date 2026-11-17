@@ -42,7 +42,7 @@ class VectorsTest {
         val signed = mapOf(
             "packets" to mapOf("circleSigned" to setOf("signature", "opened", "packet"), "directInternet" to setOf("opened", "packet")),
             "envelope" to mapOf("circle" to setOf("sealed"), "inbox" to setOf("sealed")),
-            "person" to mapOf("chain" to setOf("cert", "list", "proof")),
+            "person" to mapOf("chain" to setOf("cert", "list", "proof"), "intro" to setOf("signed")),
             "radio" to mapOf(
                 "circlePacket" to setOf("signature", "packet", "opened"),
                 "alivePacket" to setOf("packet", "opened"),
@@ -92,6 +92,10 @@ class VectorsTest {
         if (chain != null) {
             val p = AnmpPersons.verify(chain.hex("proof"))
             assertEquals(2, p?.deviceIds?.size)
+            ((v["person"] as JsonObject)["intro"] as? JsonObject)?.let { intro ->
+                val card = assertNotNull(AnmpIntros.verify(intro.hex("signed"), assertNotNull(p).cert.person))
+                assertEquals("Ilse", card.name)
+            }
         }
         (v["alert"] as? JsonObject)?.let { alert ->
             for (name in listOf("sender", "owner")) {
@@ -175,6 +179,8 @@ class VectorsTest {
         val personId = AnmpPersons.personIdOf(root.publicKey)
         val certSigned = AnmpPersons.certify(root, personCert)
         val listSigned = AnmpPersons.signList(person, deviceList)
+        val introCard = AnmpIntroCard(ByteArray(16) { 0x11 }, ts + AnmpIntros.LIFETIME_SECONDS, ByteArray(16) { 0x22 }, "Ilse", ByteArray(16) { 0x33 }, personId)
+        val introSigned = AnmpIntros.sign(person, introCard)
         val deviceA = device(a)
         val deviceB = device(b)
         val radio = Radio.of(a, ts)
@@ -281,6 +287,12 @@ class VectorsTest {
                     hex("cert", certSigned)
                     hex("list", listSigned)
                     hex("proof", AnmpPersons.proof(certSigned, listSigned))
+                }
+                putJsonObject("intro") {
+                    put("comment", "ADR 0116: card signed by the person key above; person = 16 x 0x22, to = 16 x 0x33, by = personId")
+                    hex("cardBody", Anmp.cbor.encodeToByteArray(AnmpIntroCard.serializer(), introCard))
+                    hex("signingBytes", AnmpPersons.signingBytes(AnmpInfo.INTRO, Anmp.cbor.encodeToByteArray(AnmpIntroCard.serializer(), introCard)))
+                    hex("signed", introSigned)
                 }
             }
             putJsonObject("blob") {

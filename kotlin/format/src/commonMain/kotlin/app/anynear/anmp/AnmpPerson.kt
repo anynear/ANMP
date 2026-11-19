@@ -107,6 +107,11 @@ class AnmpSync(
     @CborLabel(5) val channels: List<AnmpSyncChannel> = emptyList(),
     /** Contact requests the person sent and that are not answered yet (ADR 0116), so every own device lets the answer in. */
     @CborLabel(6) val asked: List<AnmpSyncAsked> = emptyList(),
+    /**
+     * Grants of the published contact links (wire form, ADR 0084 §6), so that every own device takes whoever writes
+     * through one as a contact at once (ADR 0116 §7.6), not only the device that made the link.
+     */
+    @CborLabel(7) val links: List<String> = emptyList(),
 )
 
 /**
@@ -145,6 +150,8 @@ class AnmpSyncContact(
     @CborLabel(2) val key: ByteArray,
     @CborLabel(3) val inbox: ByteArray? = null,
     @CborLabel(4) val person: ByteArray? = null,
+    /** When it became a contact on the sending device (ms); 0 = unknown. */
+    @CborLabel(5) val since: Long = 0,
 )
 
 /**

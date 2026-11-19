@@ -89,6 +89,11 @@ data class MemberState(
     val personId: String? = null,
     /** X25519 key of the person's mailbox recipient from the contact link (ADR 0084), b64u; `null` if unknown. */
     val mailboxKey: String? = null,
+    /**
+     * When the person became a contact (ms), for contacts ([CONTACTS]) only: the app sorts a contact without messages
+     * by it. Every device of a person keeps the time of its first one; 0 = unknown (added before this was kept).
+     */
+    val addedAt: Long = 0,
 ) {
     /** Person ID, or the device ID for a device without key chain. */
     val person: String get() = personId ?: deviceId

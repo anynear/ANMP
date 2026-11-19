@@ -90,9 +90,10 @@ internal class Transport(
     private val events: suspend (CoreEvent) -> Unit,
     /**
      * Every holder refused a message entry for [space] with 403 (no right, revoked grant): the owner of that mailbox
-     * most likely took the grant back, e.g. after deleting everything (ADR 0046).
+     * most likely took the grant back, e.g. after deleting everything (ADR 0046). [grant]: hash of the grant we wrote
+     * with. `true` if another grant for the space is worth one more try (the refused one was dropped).
      */
-    private val denied: suspend (space: String) -> Unit = {},
+    private val denied: suspend (space: String, grant: String?) -> Boolean = { _, _ -> false },
 ) {
     private val lock = Mutex()
     private val running = mutableSetOf<String>()
@@ -212,7 +213,19 @@ internal class Transport(
             }
             val entry = job.entry
             if (isCancelled(job)) return
-            val ok = if (entry == null) true else deliver(job, entry, a, deadline) { n -> if (job.ref.isNotEmpty()) events(CoreEvent.Stored(job.ref, n)) }
+            val stored: suspend (Int) -> Unit = { n -> if (job.ref.isNotEmpty()) events(CoreEvent.Stored(job.ref, n)) }
+            var retry = false
+            var ok = if (entry == null) true else deliver(job, entry, a, deadline, onDenied = { retry = it }, onStored = stored)
+            // Refused for a revoked grant while another one is there (contact added again): try with that one.
+            var used: SpaceAccess = a
+            var left = MAX_GRANT_RETRIES
+            while (!ok && retry && entry != null && left-- > 0 && !isCancelled(job)) {
+                retry = false
+                val fresh = access(job.space) ?: break
+                if (fresh.grant?.hash == used.grant?.hash) break
+                used = fresh
+                ok = deliver(job, entry, fresh, deadline, onDenied = { retry = it }, onStored = stored)
+            }
             if (!ok && job.ref.isNotEmpty()) events(CoreEvent.SendFailed(job.ref))
             // Wait for the contents to reach all their holders before forgetting the job.
             drop(job)
@@ -226,7 +239,9 @@ internal class Transport(
      * Puts [obj] at all its holders until each confirmed or [deadline]. [onStored] gets the number of relays that
      * have it after every new receipt. `false` if no relay took it.
      */
-    private suspend fun deliver(job: PendingJob, obj: PendingObject, a: SpaceAccess, deadline: Long, onStored: suspend (Int) -> Unit): Boolean {
+    private suspend fun deliver(
+        job: PendingJob, obj: PendingObject, a: SpaceAccess, deadline: Long, onDenied: (retry: Boolean) -> Unit = {}, onStored: suspend (Int) -> Unit,
+    ): Boolean {
         val bytes = platform.blobs.read(blobName(job.id, obj.id)) ?: return obj.done.isNotEmpty()
         val done = obj.done.toMutableSet()
         val refused = mutableSetOf<String>()
@@ -276,7 +291,7 @@ internal class Transport(
         if (done.isEmpty() && obj.entry && job.ref.isNotEmpty() && forbidden.isNotEmpty() && forbidden == refused &&
             net.holders(key).all { it.node.toString() in forbidden }
         ) {
-            denied(job.space)
+            onDenied(denied(job.space, a.grant?.hash?.toString()))
         }
         return done.isNotEmpty()
     }
@@ -456,6 +471,9 @@ internal class Transport(
     companion object {
         const val STORE_KEY = "core.pending"
         private const val MAX_JOBS = 2_000
+
+        /** How often a message refused for a revoked grant is tried with another grant of the same mailbox. */
+        private const val MAX_GRANT_RETRIES = 3
         private val serializer = ListSerializer(PendingJob.serializer())
 
         fun blobName(job: String, id: String) = "core/job/$job/$id"

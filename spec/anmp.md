@@ -149,10 +149,10 @@ Structures (see CDDL for types):
 | part | 0 id (blob ID, 32) · 1 key 32 · 2 from (space, 32) · 3 SHA-256 of the plaintext 32 · 4 delete token 32? (pre-ANDP, no longer written) · 5 grant? (ANDP delete grant scoped to the part) |
 | rekey | 0 key 32 · 1 epoch · 2 removed device 16? · 3 why (`remove`/`reset`/`left`/`device`)? · 4 circle? · 5 ts ms? |
 | removed | 0 epoch · 1 circle? · 2 ts ms? |
-| sync | 0 ts ms · 1 name? · 2 [* sync-circle] · 3 [* sync-contact] · 4 [* gone] · 5 [* sync-channel]? · 6 [* sync-asked]? |
+| sync | 0 ts ms · 1 name? · 2 [* sync-circle] · 3 [* sync-contact] · 4 [* gone] · 5 [* sync-channel]? · 6 [* sync-asked]? · 7 [* published link grant (wire form)]? |
 | sync-asked | 0 person (person ID, or device ID from a contact link) · 1 name · 2 device? · 3 by (introducer)? · 4 ts ms · 5 until ms (ADR 0116) |
 | sync-circle | 0 id · 1 name · 2 secret 32 · 3 epoch? · 4 epochTs ms? · 5 epochBy 16? |
-| sync-contact | 0 name · 1 signKey 32 · 2 key 32 · 3 inbox 32? · 4 person proof? |
+| sync-contact | 0 name · 1 signKey 32 · 2 key 32 · 3 inbox 32? · 4 person proof? · 5 since ms? (when it became a contact; absent or 0 = unknown) |
 | gone | 0 id (circle ID, person ID or channel ID) · 1 ts ms |
 | sync-channel | 0 id (space, tstr) · 1 name · 2 private read key 32 · 3 read grant (wire form) · 4 joined ms? · 5 curated? · 6 owner seed 32? · 7 nameTs ms? · 8 keyTs ms? · 9 [* sync-ingress]? · 10 [* revoked device address ID]? · 11 [* sync-subscriber]? · 12 [* gone] (removed subscribers, device ID)? · 13 channel-join? |
 | sync-subscriber | 0 device 16 · 1 name? · 2 key 32 · 3 inbox 32 · 4 grant (CBOR) · 5 since ms? · 6 ts ms? |
@@ -713,7 +713,10 @@ Nobody becomes a contact without the consent of the person asked.
   member becomes a **request**: the reader keeps name, keys, mailbox, grant and picture, adds nothing and issues no
   grant; messages are reported (to show with the request), no receipt is sent. Exceptions: the sender wrote with the
   grant of a published contact link (support, ADR 0084 §6), or the reader asked the sender itself (below); both are
-  taken as contact at once as before.
+  taken as contact at once as before. The grants of the published links go to the own other devices in `sync` field 7
+  (only write grants for anyone on the own mailbox, signed by its owner, not expired), so every device of the person
+  knows them, not only the one that made the link; withdrawing them leaves a tombstone `link-revoked:<grant hash>`
+  (`gone`), and the other devices stop taking that grant too.
 - **Contact link:** whoever adds a contact link adds the device as before, but sends its `profile` with field 39 `ask`
   and keeps a **sent request** for 30 days. It ends when a `direct` or `profile` of the person arrives, or silently at
   its time (the device is then forgotten again). Older readers ignore field 39 and add at once as before.

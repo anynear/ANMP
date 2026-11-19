@@ -250,8 +250,8 @@ class AnmpCore(
     /** Entries of a previous circle space already copied into the new one since the start. */
     private val circleCopies = mutableSetOf<String>()
 
-    private val transport = Transport(cs, platform, net, pool, timings, ::accessFor, ::ownWatchId, { emit(it) }) { space ->
-        onCore { onMailboxDenied(space) }
+    private val transport = Transport(cs, platform, net, pool, timings, ::accessFor, ::ownWatchId, { emit(it) }) { space, grant ->
+        onCore { onMailboxDenied(space, grant) }
     }
     private val radioSoftware = RadioInbox.parse(config.radioSoftwareSpace, config.radioSoftwareGrant)?.let { (space, grant) ->
         PublishedSpace(space, grant, net, pool)
@@ -428,6 +428,7 @@ class AnmpCore(
                 mailboxKey = m.mailboxKey ?: existing?.mailboxKey ?: s.members.firstNotNullOfOrNull { it.mailboxKey?.takeIf { _ -> it.deviceId == m.deviceId } },
             )
             if (existing != null && existing.imageTs > merged.imageTs) merged = merged.copy(image = existing.image, imageTs = existing.imageTs)
+            merged = merged.copy(addedAt = addedAtOf(s, m, existing))
             if (existing == merged) return@update s
             s.copy(members = s.members.filterNot { it.circleId == m.circleId && it.deviceId == m.deviceId } + merged)
         }
@@ -446,6 +447,19 @@ class AnmpCore(
             emit(CoreEvent.ContactRequestsChanged())
         }
         return ok to isNew
+    }
+
+    /**
+     * When the contact [m] was added (ADR 0008, sorting of „Nachrichten“): a known entry keeps its time, a further
+     * device of a contact takes the time of the person (0 stays unknown), a new contact the time from a snapshot of an
+     * own device (none: unknown, [ADDED_UNKNOWN]) or now. Entries of circles carry none.
+     */
+    private fun addedAtOf(s: CoreState, m: MemberState, existing: MemberState?): Long {
+        if (m.circleId != MemberState.CONTACTS) return 0
+        if (existing != null) return existing.addedAt.takeIf { it > 0 } ?: m.addedAt
+        val siblings = s.members.filter { it.circleId == MemberState.CONTACTS && it.person == m.person }
+        if (siblings.isNotEmpty()) return siblings.map { it.addedAt }.filter { it > 0 }.minOrNull() ?: 0
+        return if (m.addedAt == ADDED_UNKNOWN) 0 else m.addedAt.takeIf { it > 0 } ?: now()
     }
 
     /**
@@ -1141,9 +1155,13 @@ class AnmpCore(
             return p.list.devices.indices.map { Target(Peer(B64.encode(p.deviceIds[it]), B64.encode(p.list.devices[it].key)), inbox, legacy = false) }
                 .filterNot { isRevoked(it.peer.deviceId) }
         }
-        val m = state.members.lastOrNull { it.deviceId == person && it.inbox != null } ?: state.members.lastOrNull { it.deviceId == person } ?: return emptyList()
+        // Before the chain: the device itself, or a member whose person we know from an introduction (ADR 0116).
+        val m = state.members.lastOrNull { it.isOf(person) && it.inbox != null } ?: state.members.lastOrNull { it.isOf(person) } ?: return emptyList()
         return listOf(targetOfMember(m))
     }
+
+    /** [id] is this member's device or, before its chain is known, its person (ADR 0116: known from the introduction). */
+    private fun MemberState.isOf(id: String) = deviceId == id || personId == id
 
     private fun targetOfMember(m: MemberState) = Target(Peer(m.deviceId, m.publicKey), m.inbox.orEmpty(), legacy = m.personId == null)
 
@@ -1154,7 +1172,7 @@ class AnmpCore(
      */
     private suspend fun mailboxTargetOf(person: String): Target? {
         if (personState(person) != null) return null
-        val m = state.members.lastOrNull { it.deviceId == person && it.mailboxKey != null && it.inbox != null } ?: return null
+        val m = state.members.lastOrNull { it.isOf(person) && it.mailboxKey != null && it.inbox != null } ?: return null
         val space = runCatching { Key.parse(m.inbox!!) }.getOrNull() ?: return null
         val id = AnmpKeys.mailboxIdOf(space.bytes)
         return Target(Peer(B64.encode(id), m.mailboxKey!!), m.inbox!!, legacy = false)
@@ -1720,7 +1738,10 @@ class AnmpCore(
         when (o.kind) {
             AnmpKind.DIRECT -> if (peer != null) {
                 val space = targetsOf(peer).firstOrNull()?.inbox?.takeIf { it.isNotEmpty() } ?: l.access.name
-                messageEvent(Conversation.Direct(peer), objectId, space, o, person = if (author != null) peer else ownPersonId, fromDevice = from)
+                // The card of an introduction: the partner's for us, or our own to the partner (ADR 0116), shown like on the
+                // device that received or sent it.
+                val intro = if (author != null) introOf(o, by = peer, to = ownPersonId) else introOf(o, by = ownPersonId, to = peer)
+                messageEvent(Conversation.Direct(peer), objectId, space, o, person = if (author != null) peer else ownPersonId, fromDevice = from, intro = intro)
                     ?.let { emitReceived(it, l.access.space, objectId) }
             }
             AnmpKind.REACT -> if (conversation != null) reactionEvent(conversation, o, fromDevice = from)?.let { emit(it) }
@@ -1797,7 +1818,8 @@ class AnmpCore(
         if (o.forwarded) {
             // Radio packet put into our mailbox by an app at a shared radio (ADR 0022); opened like over radio.
             when (o.kind) {
-                AnmpKind.DIRECT -> messageEvent(Conversation.Direct(person), objectId, l.access.name, o, person = person)?.let { emitReceived(it, l.access.space, objectId) }
+                AnmpKind.DIRECT -> messageEvent(Conversation.Direct(person), objectId, l.access.name, o, person = person, intro = introOf(o, person))
+                    ?.let { emitReceived(it, l.access.space, objectId) }
                 AnmpKind.REACT -> reactionEvent(Conversation.Direct(person), o)?.let { emit(it) }
                 AnmpKind.DELETE -> emitDeleted(deleteEvent(Conversation.Direct(person), o.fromDevice, c))
                 AnmpKind.READ -> c.ids?.filter { it.size == Anmp.ID_BYTES }?.map(B64::encode)?.takeIf { it.isNotEmpty() }
@@ -1951,6 +1973,9 @@ class AnmpCore(
 
     /** Tombstone prefix of a declined request (ADR 0116), so the own other devices drop it too. */
     private val DECLINED = "declined:"
+
+    /** Tombstone prefix of a withdrawn published link (grant hash), so the own other devices stop taking it too. */
+    private val REVOKED_LINK = "link-revoked:"
 
 
     private fun contactPurpose(deviceId: String) = "contact:$deviceId"
@@ -2568,6 +2593,9 @@ class AnmpCore(
     /** Withdraws the grant of every published contact link (ADR 0084 §6); contacts made through it keep their own grants. */
     suspend fun revokePublicContactLink(): Unit = onCore {
         opened.await()
+        // The own other devices know these grants too (sync field 7): a tombstone makes them drop them as well.
+        val t = nowS()
+        state.issued.filter { it.purpose == PUBLIC_LINK && !it.revoked && it.until > t }.forEach { addTombstone(REVOKED_LINK + it.hash) }
         revoke(PUBLIC_LINK)
     }
 
@@ -2601,10 +2629,10 @@ class AnmpCore(
     suspend fun removeContact(id: String): Unit = onCore {
         val person = personOf(id)
         val devices = state.members.filter { it.circleId == MemberState.CONTACTS && it.person == person }.map { it.deviceId }.ifEmpty { listOf(id) }
-        devices.forEach {
-            forgetMember(MemberState.CONTACTS, it)
-            revoke(contactPurpose(it))
-        }
+        // A grant sent to the mailbox recipient (ADR 0084) is issued for it, not for a device: revoke that one too.
+        val purposes = (devices.flatMap { listOf(contactPurpose(it), grantPurposeOf(it)) } + recipientsOf(person).map { contactPurpose(it.peer.deviceId) }).toSet()
+        devices.forEach { forgetMember(MemberState.CONTACTS, it) }
+        purposes.forEach { revoke(it) }
         addTombstone(person)
         reachableAgain(person)
     }
@@ -2714,13 +2742,18 @@ class AnmpCore(
         return AnmpIntros.verify(signed, key ?: return null)?.takeIf { B64.encode(it.by) == by }
     }
 
-    /** An introduction in a direct message from [person], if valid and for us; to show as a card. */
-    private suspend fun introOf(o: Opened, person: String): Intro? {
+    /**
+     * An introduction in a direct message, to show as a card: signed by [by] (who introduces) for [to]. Received: [by] is
+     * the sender, [to] we. An own copy of what we sent (ADR 0107): [by] we, [to] the partner. Every way a direct message
+     * arrives (mailbox, own copy, forwarded radio packet, request, wake-up) takes it from here, so none shows only the
+     * stand-in text.
+     */
+    private suspend fun introOf(o: Opened, by: String, to: String = ownPersonId): Intro? {
         val i = o.content.intro ?: return null
-        val card = verifyIntro(i.card, person) ?: return null
-        if (B64.encode(card.to) != ownPersonId) return null
+        val card = verifyIntro(i.card, by) ?: return null
+        if (B64.encode(card.to) != to) return null
         val image = i.image?.takeIf { it.type == "jpg" && it.id.size == Anmp.BLOB_ID_BYTES && it.key.size == 32 && it.size > 0 }
-        return Intro(B64.encode(card.id), B64.encode(card.person), card.name, person, card.until * 1000, B64.encode(i.card), image)
+        return Intro(B64.encode(card.id), B64.encode(card.person), card.name, by, card.until * 1000, B64.encode(i.card), image)
     }
 
     /**
@@ -2812,7 +2845,7 @@ class AnmpCore(
             emit(CoreEvent.ContactRequestsChanged())
         }
         if (o.kind == AnmpKind.DIRECT) {
-            messageEvent(Conversation.Direct(person), objectId, l.access.name, o, person = person, fromRequest = true)?.let { emitReceived(it, l.access.space, objectId) }
+            messageEvent(Conversation.Direct(person), objectId, l.access.name, o, person = person, intro = introOf(o, person), fromRequest = true)?.let { emitReceived(it, l.access.space, objectId) }
         }
     }
 
@@ -2855,16 +2888,27 @@ class AnmpCore(
      * Every holder refused a message for the mailbox [space] with 403 ([Transport]): marks each other person with that
      * mailbox as unreachable (ADR 0046). Never the own person: our own mailbox refusing us is a different fault.
      */
-    private suspend fun onMailboxDenied(space: String) {
+    private suspend fun onMailboxDenied(space: String, grant: String? = null): Boolean {
+        // The refused grant is revoked. If the owner gave us a newer one since (e.g. added us again after removing us),
+        // drop the revoked one: the newer one is used from now on and the write is worth one more try. An older grant
+        // (say from its contact link) does not count: removed stays removed.
+        val refused = state.grants.filter { g -> g.inbox == space && grant != null && runCatching { Grant.parse(g.grant).hash.toString() }.getOrNull() == grant }
+        val since = refused.maxOfOrNull { it.issued }
+        if (since != null && state.grants.any { it.inbox == space && it !in refused && it.issued > since && it.until > nowS() + 60 }) {
+            update { s -> s.copy(grants = s.grants.filterNot { it in refused }) }
+            log.log("mailbox ${space.take(8)} refuses a revoked grant, trying the newer one")
+            return true
+        }
         val own = ownPersonId
         val persons = state.members.map { it.person }.distinct()
             .filter { it != own && it !in state.unreachable }
             .filter { p -> targetsOf(p).any { it.inbox == space } || mailboxTargetOf(p)?.inbox == space }
-        if (persons.isEmpty()) return
+        if (persons.isEmpty()) return false
         val t = now()
         log.log("mailbox ${space.take(8)} refuses us: ${persons.size} person(s) unreachable")
         update { s -> s.copy(unreachable = s.unreachable + persons.associateWith { t }) }
         persons.forEach { emit(CoreEvent.ContactUnreachable(it, t)) }
+        return false
     }
 
     /** Clears the mark of [person] set by [onMailboxDenied]. */
@@ -4807,7 +4851,7 @@ class AnmpCore(
                     val msg = when {
                         l is Listed.Circle && p.kind == AnmpKind.CIRCLE && !p.toUs -> messageEvent(Conversation.Circle(l.circleId), id, l.access.name, p)
                         l is Listed.Inbox && p.kind == AnmpKind.DIRECT && p.toUs && personOf(p.fromDevice) != ownPersonId ->
-                            messageEvent(Conversation.Direct(personOf(p.fromDevice)), id, l.access.name, p)
+                            messageEvent(Conversation.Direct(personOf(p.fromDevice)), id, l.access.name, p, intro = introOf(p, personOf(p.fromDevice)))
                         l is Listed.Circle && p.kind == AnmpKind.REACT && !p.toUs -> reactionEvent(Conversation.Circle(l.circleId), p, id)
                         l is Listed.Inbox && p.kind == AnmpKind.REACT && p.toUs && personOf(p.fromDevice) != ownPersonId ->
                             reactionEvent(Conversation.Direct(personOf(p.fromDevice)), p, id)
@@ -4848,6 +4892,7 @@ class AnmpCore(
             listOf(
                 s.circles.filterNot { it.removed }.map { it.id to it.secret }, s.members.filter { it.circleId == MemberState.CONTACTS }.map { it.deviceId },
                 s.profile.name, s.tombstones, s.ownProof, s.channels.map { it.copy(addedHere = 0) }, s.sentRequests,
+                s.issued.filter { it.purpose == PUBLIC_LINK && !it.revoked }.map { it.hash },
             )
         }
             .distinctUntilChanged()
@@ -4866,7 +4911,10 @@ class AnmpCore(
             AnmpSyncCircle(it.id, it.name, B64.decode(it.secret), it.epoch, it.epochTs, it.epochBy.takeIf { b -> b.isNotEmpty() }?.let(B64::decode))
         }
         val contacts = s.members.filter { it.circleId == MemberState.CONTACTS && it.signKey != null }.map { m ->
-            AnmpSyncContact(m.name, B64.decode(m.signKey!!), B64.decode(m.publicKey), m.inbox?.let(B64::decode), m.personId?.let { personState(it) }?.proof?.let(B64::decode))
+            AnmpSyncContact(
+                m.name, B64.decode(m.signKey!!), B64.decode(m.publicKey), m.inbox?.let(B64::decode), m.personId?.let { personState(it) }?.proof?.let(B64::decode),
+                m.addedAt,
+            )
         }
         val channels = s.channels.map { c ->
             AnmpSyncChannel(
@@ -4883,7 +4931,9 @@ class AnmpCore(
             )
         }
         val asked = s.sentRequests.map { AnmpSyncAsked(it.person, it.name, it.deviceId, it.introducedBy, it.ts, it.until) }
-        return AnmpSync(now(), s.profile.name.takeIf { it.isNotBlank() }, circles, contacts, s.tombstones.map { AnmpSyncGone(it.id, it.ts) }, channels, asked)
+        val t = nowS()
+        val links = s.issued.filter { it.purpose == PUBLIC_LINK && !it.revoked && it.until > t }.map { it.grant }
+        return AnmpSync(now(), s.profile.name.takeIf { it.isNotBlank() }, circles, contacts, s.tombstones.map { AnmpSyncGone(it.id, it.ts) }, channels, asked, links)
     }
 
     /** Takes from a snapshot what this device does not have; drops what was left or removed there. */
@@ -4896,6 +4946,10 @@ class AnmpCore(
             channel(g.id)?.takeIf { it.joinedAt < g.ts }?.let { forgetChannel(it) }
             val devices = state.members.filter { it.circleId == MemberState.CONTACTS && it.person == g.id }.map { it.deviceId }
             devices.forEach { forgetMember(MemberState.CONTACTS, it); revoke(contactPurpose(it)) }
+            // Published link withdrawn on another own device: its grant no longer makes a writer a contact here.
+            g.id.removePrefix(REVOKED_LINK).takeIf { g.id.startsWith(REVOKED_LINK) }?.let { hash ->
+                update { s -> s.copy(issued = s.issued.map { if (it.hash == hash && it.purpose == PUBLIC_LINK) it.copy(revoked = true) else it }) }
+            }
             // Declined on another own device (ADR 0116).
             g.id.removePrefix(DECLINED).takeIf { g.id.startsWith(DECLINED) }?.let { declined ->
                 if (state.requests.any { it.person == declined }) {
@@ -4936,11 +4990,37 @@ class AnmpCore(
                 update { s -> s.copy(persons = s.persons + PersonState(chain.personIdText, B64.encode(chain.proof), chain.cert.n, chain.list.seq, chain.list.revoked.map(B64::encode))) }
             }
             if (member(MemberState.CONTACTS, device) != null) continue
-            upsertMember(MemberState(MemberState.CONTACTS, device, c.name.take(AnmpLinks.MAX_NAME), B64.encode(c.key), B64.encode(c.signKey), inbox = c.inbox?.takeIf { it.size == 32 }?.let(B64::encode), personId = pid))
+            upsertMember(
+                MemberState(
+                    MemberState.CONTACTS, device, c.name.take(AnmpLinks.MAX_NAME), B64.encode(c.key), B64.encode(c.signKey),
+                    inbox = c.inbox?.takeIf { it.size == 32 }?.let(B64::encode), personId = pid,
+                    // Older devices send no time, and 0 is unknown there too: such a contact is not new, keep it unknown.
+                    addedAt = c.since.takeIf { it in 1..now() } ?: ADDED_UNKNOWN,
+                ),
+            )
         }
+        takePublicLinks(sync.links)
         for (c in sync.channels) runCatching { takeChannel(c, sync.ts) }.onFailure { e -> if (e is CancellationException) throw e }
         sync.name?.takeIf { it.isNotBlank() && state.profile.name.isBlank() }?.let { n -> update { s -> s.copy(profile = s.profile.copy(name = n.take(AnmpLinks.MAX_NAME))) } }
         warmProofs()
+    }
+
+    /**
+     * Grants of published contact links made on another own device (ADR 0084 §6): only write grants for anyone on our
+     * own mailbox, signed by its owner and not expired. Kept like our own, so [viaPublicLink] knows them here too.
+     */
+    private suspend fun takePublicLinks(wires: List<String>) {
+        val t = nowS()
+        val fresh = wires.distinct().mapNotNull { wire ->
+            val g = runCatching { Grant.parse(wire) }.getOrNull() ?: return@mapNotNull null
+            val b = g.body
+            if (b.space != me.inbox || !b.rights.has(Rights.WRITE) || b.grantee != null || b.scope != null || b.until <= t) return@mapNotNull null
+            if (runCatching { g.verifySig() }.isFailure) return@mapNotNull null
+            val hash = g.hash.toString()
+            if (state.issued.any { it.hash == hash } || state.tombstones.any { it.id == REVOKED_LINK + hash }) return@mapNotNull null
+            IssuedGrant(PUBLIC_LINK, g.toString(), hash, b.until)
+        }
+        if (fresh.isNotEmpty()) update { s -> s.copy(issued = s.issued + fresh) }
     }
 
     /**
@@ -5813,6 +5893,9 @@ class AnmpCore(
 
         /** How long a contact request waits for an answer (ADR 0116): like the grant of a contact link. */
         private val REQUEST_LIFETIME = 30.days
+
+        /** [MemberState.addedAt] passed to [upsertMember] for a new contact whose time is not known: stays 0. */
+        private const val ADDED_UNKNOWN = -1L
 
         /** Seed of the stream key and key of the stream tags (ADR 0072), in the secret store, only on this device. */
         const val STREAM_SEED = "core.stream.seed"

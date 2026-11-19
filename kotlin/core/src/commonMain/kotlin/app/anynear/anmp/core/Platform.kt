@@ -2,6 +2,7 @@ package app.anynear.anmp.core
 
 import app.anynear.andp.AndpClient
 import app.anynear.andp.Relay
+import io.ktor.client.HttpClient
 import kotlin.time.Clock
 
 /*
@@ -88,6 +89,8 @@ class AnmpPlatform(
     val clock: CoreClock = CoreClock.SYSTEM,
     val connector: RelayConnector = platformConnector(),
     val log: CoreLog = CoreLog.NONE,
+    /** HTTP client for calls outside ANDP (login with anynear, ADR 0122); `null`: the platform's default client. */
+    val http: HttpClient? = null,
 )
 
 /** In-memory [SecretStore], for tests and the web client before it has a storage. */

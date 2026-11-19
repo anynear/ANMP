@@ -52,6 +52,11 @@ class AnmpCoreConfig(
      * recipient in the own list, and do not move the mailbox. Never set in apps.
      */
     internal val legacyDirect: Boolean = false,
+    /**
+     * Issuers whose login links (`/l#…`, ADR 0122) the app accepts. Apps keep the default; only test builds add their
+     * own (e.g. a local `id -person`). A link of any other issuer is refused.
+     */
+    val loginIssuers: List<String> = listOf(AnmpLogin.ISSUER),
 ) {
     companion object {
         const val SEED_URL = "https://anynear.net"

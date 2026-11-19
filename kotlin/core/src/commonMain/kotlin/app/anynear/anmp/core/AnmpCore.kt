@@ -79,6 +79,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.TimeoutCancellationException
+import io.ktor.client.HttpClient
+import io.ktor.client.request.get
+import io.ktor.client.request.parameter
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
+import io.ktor.http.contentType
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
@@ -2345,6 +2355,69 @@ class AnmpCore(
 
     /** Reads a pairing link of a new own device (ADR 0042 §5), also inside text; [acceptPairing] checks it again. */
     suspend fun parsePair(text: String): PairOffer? = linkHosts.firstNotNullOfOrNull { AnmpLinks.parsePair(text, it) }
+
+    /**
+     * Reads a login link (`/l#…`, ADR 0122), also inside text; `null` if none, broken or from an issuer not in
+     * [AnmpCoreConfig.loginIssuers].
+     */
+    fun parseLoginLink(text: String): LoginLink? =
+        linkHosts.firstNotNullOfOrNull { AnmpLogin.parse(text, it) }?.takeIf { l -> config.loginIssuers.any { it.trimEnd('/') == l.issuer } }
+
+    /** Whether [text] holds a login link at all (also a broken one or of an unknown issuer). */
+    fun isLoginLink(text: String): Boolean = linkHosts.any { AnmpLogin.isLink(text, it) }
+
+    private val http: HttpClient by lazy { platform.http ?: HttpClient() }
+
+    /** `GET {issuer}/l/info` (ANIP §10a.3): service, domain and the three numbers. Changes nothing. */
+    suspend fun loginInfo(link: LoginLink): LoginInfo {
+        if (config.loginIssuers.none { it.trimEnd('/') == link.issuer }) return LoginInfo(LoginResult.INVALID)
+        val res = runCatching {
+            withTimeout(LOGIN_TIMEOUT) { http.get(link.issuer + "/l/info") { parameter("r", link.req) }.let { it.status.value to it.bodyAsText() } }
+        }.getOrElse { if (it is CancellationException && it !is TimeoutCancellationException) throw it else return LoginInfo(LoginResult.OFFLINE) }
+        val (code, body) = res
+        if (code == 429) return LoginInfo(LoginResult.TOO_MANY)
+        if (code == 400) return LoginInfo(LoginResult.EXPIRED)
+        if (code != 200) return LoginInfo(LoginResult.OFFLINE)
+        val w = runCatching { coreJson.decodeFromString(LoginInfoWire.serializer(), body) }.getOrNull()
+            ?.takeIf { it.client.isNotEmpty() && it.name.isNotEmpty() && it.domain.isNotEmpty() && it.choices.size == 3 } ?: return LoginInfo(LoginResult.INVALID)
+        return LoginInfo(LoginResult.OK, link.issuer, link.req, w.client, w.name.take(80), w.domain.take(253), w.choices.toIntArray(), w.exp)
+    }
+
+    /**
+     * Confirms a login after the person picked [n] and unlocked the device (ANIP §10a.3): signs with the device key and
+     * sends `POST {issuer}/l/confirm` with the own key chain. The app asks for the device lock before calling this.
+     */
+    suspend fun confirmLogin(info: LoginInfo, n: Int, name: String): LoginResult {
+        if (info.status != LoginResult.OK || config.loginIssuers.none { it.trimEnd('/') == info.issuer }) return LoginResult(LoginResult.INVALID)
+        val clean = AnmpLogin.cleanName(name) ?: return LoginResult(LoginResult.BAD_NAME)
+        val req = runCatching { B64.decode(info.req) }.getOrNull() ?: return LoginResult(LoginResult.INVALID)
+        val body = onCore {
+            val proof = state.ownProof ?: return@onCore null
+            val ts = nowS()
+            val sig = me.device.sign(AnmpLogin.confirmBytes(info.issuer, info.client, req, n, clean, ts))
+            LoginConfirmWire(info.req, n, clean, ts, proof, me.signKey, B64.encode(sig))
+        } ?: return LoginResult(LoginResult.NO_CHAIN)
+        val res = runCatching {
+            withTimeout(LOGIN_TIMEOUT) {
+                http.post(info.issuer + "/l/confirm") {
+                    contentType(ContentType.Application.Json)
+                    setBody(coreJson.encodeToString(LoginConfirmWire.serializer(), body))
+                }.let { it.status.value to it.bodyAsText() }
+            }
+        }.getOrElse { if (it is CancellationException && it !is TimeoutCancellationException) throw it else return LoginResult(LoginResult.OFFLINE) }
+        val (code, text) = res
+        val answer = runCatching { coreJson.decodeFromString(LoginAnswerWire.serializer(), text) }.getOrNull()
+        return LoginResult(
+            when {
+                code == 200 && answer?.ok == true -> LoginResult.OK
+                code == 200 && answer != null -> LoginResult.WRONG_NUMBER
+                code == 400 -> LoginResult.EXPIRED
+                code == 403 -> LoginResult.REJECTED
+                code == 429 -> LoginResult.TOO_MANY
+                else -> LoginResult.OFFLINE
+            },
+        )
+    }
 
     /** Joins by an invitation link (also inside text). The whole history comes from a member (ADR 0014). */
     suspend fun joinCircle(text: String): JoinResult  = onCore {
@@ -5937,6 +6010,7 @@ class AnmpCore(
         private const val MAX_ATTACHMENTS = 5
         /** Link preview (ADR 0069): title and site, description. */
         private const val LINK_TITLE_MAX = 120
+        private val LOGIN_TIMEOUT = 20.seconds
         private const val LINK_DESCRIPTION_MAX = 200
         private const val MAX_HISTORY_PARTS = 500
         private const val MAX_FORWARDS = 50

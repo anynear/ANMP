@@ -331,6 +331,18 @@ class AnmpCoreWeb private constructor(private val core: AnmpCore, private val ho
     /** What an invitation link (circle, contact, channel) stands for, e.g. to show it as a card; `null` if none or broken. */
     fun previewLink(link: String): Promise<LinkPreview?> = GlobalScope.promise { core.previewLink(link) }
 
+    /** Login link (`/l#…`, ADR 0122) of a known issuer; `null` if none, broken or of an unknown issuer. */
+    fun parseLoginLink(text: String): LoginLink? = core.parseLoginLink(text)
+
+    /** Whether [text] holds a login link at all, also a broken one. */
+    fun isLoginLink(text: String): Boolean = core.isLoginLink(text)
+
+    /** Service, domain and the three numbers of a login ([AnmpCore.loginInfo]). */
+    fun loginInfo(link: LoginLink): Promise<LoginInfo> = GlobalScope.promise { core.loginInfo(link) }
+
+    /** Confirms a login after the person unlocked; [LoginResult.status] tells what happened. */
+    fun confirmLogin(info: LoginInfo, n: Int, name: String): Promise<LoginResult> = GlobalScope.promise { core.confirmLogin(info, n, name) }
+
     fun leaveChannel(channelId: String): Promise<Unit> = GlobalScope.promise { core.leaveChannel(channelId) }
 
     /** Alert without attachments into an own channel; [until] Unix seconds or 0, [replaces] hex ID or `null`. */

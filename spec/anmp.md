@@ -767,6 +767,14 @@ and the network key `NETWORK_KEY` (ADR 0061). Besides the current list's key and
 also accepts a newer list signed by the configured key: an app updated to a new key that never saw the
 hand-over list still follows the network.
 
+**Login link** `https://anynear.app/l#…` (ADR 0122): a service asks the person to sign in through the personal issuer
+(ANIP §10a). Fragment: b64u of CBOR `{0 issuer (tstr), 1 sealed request (bstr)}`; the request is opaque to the app. The
+app accepts only the issuers it is configured with (`https://id.anynear.app`; test builds may add their own), reads
+service, domain and three numbers from `GET {issuer}/l/info?r=` b64u(request), and after the device lock sends
+`POST {issuer}/l/confirm` with the own proof, the device's Ed25519 key and a signature of that **device key** over
+`anip/v1/person-confirm\n` issuer `\n` client ID `\n` b64u(request) `\n` number `\n` name `\n` Unix seconds. The
+person key keeps signing nothing but device lists.
+
 ### Personal store (ADR 0041)
 
 "Meine Ablage" (my files) in the app: files of one identity that stay on the relays **without expiry** (`until = 0`, ANDP §3 rule 4),

@@ -82,9 +82,10 @@ internal class World(val net: FakeNet, val scope: CoroutineScope) {
         /** Given ones keep the state of an earlier start of the same installation (an app update). */
         store: MemoryKeyValueStore = MemoryKeyValueStore(),
         blobs: MemoryBlobStore = MemoryBlobStore(),
+        http: io.ktor.client.HttpClient? = null,
     ): Device {
         val host = TestHost()
-        val core = AnmpCore(scope, config, AnmpPlatform(secrets, store, blobs, clock = clock, connector = net.connector, log = CoreLog { }), host)
+        val core = AnmpCore(scope, config, AnmpPlatform(secrets, store, blobs, clock = clock, connector = net.connector, log = CoreLog { }, http = http), host)
         val d = Device(name, core, secrets, store, blobs, host)
         scope.launch {
             core.events.collect { e ->

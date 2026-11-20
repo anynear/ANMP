@@ -14,6 +14,8 @@ import app.anynear.andp.Andp
 import app.anynear.andp.AndpClient
 import app.anynear.andp.AndpException
 import app.anynear.andp.AndpHeaders
+import app.anynear.andp.AndpInt
+import app.anynear.andp.ListedObject
 import app.anynear.andp.AndpPaths
 import app.anynear.andp.Placements
 import app.anynear.andp.Policy
@@ -139,7 +141,11 @@ private class StatusAnswer(val objects: Map<String, ObjectState>)
 private class NotFound(val error: String, val holders: List<Relay>)
 
 internal class FakeRelay(val node: SigningKey, val relay: Relay) {
-    class Stored(val meta: Meta, val data: ByteArray, val seq: Long)
+    /**
+     * [notBefore], [held]: written with ANDP-Not-Before and still kept back (ANDP §19); [notify], [skip]: ANDP-Notify
+     * and ANDP-Watch-Skip of that write, for the release.
+     */
+    class Stored(val meta: Meta, val data: ByteArray, var seq: Long, val notBefore: Long = 0, var held: Boolean = false, val notify: String? = null, val skip: String = "")
 
     private val lock = Mutex()
     private val objects = mutableMapOf<String, Stored>()
@@ -173,6 +179,43 @@ internal class FakeRelay(val node: SigningKey, val relay: Relay) {
         val ch = lock.withLock { streams[token] } ?: return false
         // A ByteChannel takes one writer at a time; holders deliver concurrently.
         return runCatching { streamWrite.withLock { ch.writeStringUtf8("event: new\ndata: {\"tags\":[\"$tag\"],\"alarm\":$alarm}\n\n") } }.isSuccess
+    }
+
+    /** Offers the extension not_before (ANDP §19). Without it the relay ignores the header, like one that does not know it. */
+    var notBefore = true
+
+    /** Answers DELETE as usual but keeps the object, like a tombstone that has not reached this holder yet. */
+    var ignoreDeletes = false
+
+    /** Entries of [space] this relay keeps back. */
+    suspend fun held(space: Key): List<Stored> = lock.withLock { objects.values.filter { it.meta.space == space && it.held } }
+
+    /** PUTs that carried ANDP-Not-Before, whether the relay knows the header or not. */
+    var notBeforePuts = 0
+
+    /**
+     * Releases the entries whose time has come at [now] (Unix seconds; the default is far ahead, as if the time had
+     * passed): they take a new place in the list and wake the watches as a new entry would (ANDP §19 rule 5).
+     */
+    suspend fun release(net: FakeNet, now: Long = Long.MAX_VALUE): Int {
+        val due = lock.withLock {
+            objects.values.filter { it.held && it.notBefore <= now }.onEach {
+                it.held = false
+                it.seq = seq.value + 1
+                seq.value = it.seq
+            }
+        }
+        for (o in due) if (o.notify != AndpHeaders.NOTIFY_NONE) wake(net, o.meta.space, o.skip, o.notify == AndpHeaders.NOTIFY_ALARM)
+        return due.size
+    }
+
+    /** watch target relay (ANDP §10.2): tells the home relay of each watch of [space], except the writer's own. */
+    private suspend fun wake(net: FakeNet, space: Key, skip: String, alarm: Boolean) {
+        if (!stream) return
+        for (w in lock.withLock { watches.filter { it.space == space && it.target.type == Andp.WATCH_TYPE_RELAY } }) {
+            if (skip.isNotEmpty() && watchIdForHexToken(w.target.token) == skip) continue
+            net.relays.firstOrNull { it.node.key.toString() == w.target.node }?.deliver(w.target.token, w.target.tag, alarm)
+        }
     }
 
     /** Simulated outage: every request fails like a broken connection. */
@@ -227,7 +270,8 @@ internal class FakeRelay(val node: SigningKey, val relay: Relay) {
         when {
             path == AndpPaths.INFO -> json(run {
                 infoCalls++
-                val ext = listOf(Andp.EXTENSION_WATCH, Andp.EXTENSION_WEBPUSH) + if (stream) listOf(Andp.EXTENSION_STREAM) else emptyList()
+                val ext = listOf(Andp.EXTENSION_WATCH, Andp.EXTENSION_WEBPUSH) + (if (stream) listOf(Andp.EXTENSION_STREAM) else emptyList()) +
+                    if (notBefore) listOf(Andp.EXTENSION_NOT_BEFORE) else emptyList()
                 AndpJsonText.encodeToString(Info.serializer(), Info(node.key, net.list.network, policy, ext, FAKE_VAPID_KEY, minClient?.let { Clients(it) }, if (stream) StreamInfo(180, streamClients) else null))
             })
             path == AndpPaths.STREAM -> {
@@ -280,13 +324,16 @@ internal class FakeRelay(val node: SigningKey, val relay: Relay) {
             lock.withLock { lists += space }
             val after = r.url.parameters["after"]?.toLongOrNull() ?: 0
             val wait = r.url.parameters["wait"]?.toLongOrNull() ?: 0
-            suspend fun items() = lock.withLock { objects.values.filter { it.meta.space == space && it.meta.isEntry && it.seq > after }.sortedBy { it.seq } }
+            suspend fun items() = lock.withLock { objects.values.filter { it.meta.space == space && it.meta.isEntry && !it.held && it.seq > after }.sortedBy { it.seq } }
             var list = items()
             if (list.isEmpty() && wait > 0) {
                 withTimeoutOrNull(wait * 1000) { seq.first { it > after && items().isNotEmpty() } }
                 list = items()
             }
-            val page = ListPage(list.map { it.meta.listed(it.seq, it.data) }, (list.maxOfOrNull { it.seq } ?: after).toString())
+            val page = ListPage(
+                list.map { ListedObject(it.seq, it.meta.id, it.meta.size, it.meta.ts, it.meta.until, it.meta.placement, it.meta.refs, it.meta.revokes, it.meta.writer, it.meta.grant, it.meta.sig, it.data, it.notBefore) },
+                (list.maxOfOrNull { it.seq } ?: after).toString(),
+            )
             return json(AndpJsonText.encodeToString(ListPage.serializer(), page))
         }
         if (parts[1] == "status") {
@@ -317,28 +364,37 @@ internal class FakeRelay(val node: SigningKey, val relay: Relay) {
                 } catch (e: AndpException) {
                     return fail(403, "forbidden")
                 }
-                val notify = r.headers[AndpHeaders.NOTIFY] != AndpHeaders.NOTIFY_NONE
+                // Extension not_before (ANDP §19): kept back until its time; a relay without it ignores the header.
+                val header = r.headers[AndpHeaders.NOT_BEFORE]
+                if (header != null) lock.withLock { notBeforePuts++ }
+                val until = if (!notBefore || header == null) 0L else try {
+                    AndpInt.parse(header).also { m.checkNotBefore(it, policy.maxUntil) }
+                } catch (e: AndpException) {
+                    return fail(400, "bad_request")
+                }
+                val hold = until > nowS()
+                val notify = r.headers[AndpHeaders.NOTIFY] != AndpHeaders.NOTIFY_NONE && !hold
                 lock.withLock {
                     if (tombstones.containsKey(k)) return fail(410, "gone")
                     puts += m
                     if (notify && m.isEntry) notifiedPuts += m
                     if (notify && m.isEntry && r.headers[AndpHeaders.NOTIFY] == AndpHeaders.NOTIFY_ALARM) alarmPuts += m
-                    if (!objects.containsKey(k)) objects[k] = Stored(m, body, seq.value + 1).also { seq.value = it.seq }
+                    if (!objects.containsKey(k)) {
+                        objects[k] = if (hold) {
+                            Stored(m, body, 0, until, held = true, notify = r.headers[AndpHeaders.NOTIFY], skip = r.headers[AndpHeaders.WATCH_SKIP].orEmpty())
+                        } else {
+                            Stored(m, body, seq.value + 1, until).also { seq.value = it.seq }
+                        }
+                    }
                     m.revokes?.let { revoked += "$space/$it" }
                 }
-                // watch target relay (ANDP §10.2): tell the home relay of each watch, except the writer's own.
-                if (notify && m.isEntry && stream) {
-                    val skip = r.headers[AndpHeaders.WATCH_SKIP].orEmpty()
-                    val alarm = r.headers[AndpHeaders.NOTIFY] == AndpHeaders.NOTIFY_ALARM
-                    for (w in lock.withLock { watches.filter { it.space == space && it.target.type == Andp.WATCH_TYPE_RELAY } }) {
-                        if (skip.isNotEmpty() && watchIdForHexToken(w.target.token) == skip) continue
-                        net.relays.firstOrNull { it.node.key.toString() == w.target.node }?.deliver(w.target.token, w.target.tag, alarm)
-                    }
-                }
+                if (notify && m.isEntry) wake(net, space, r.headers[AndpHeaders.WATCH_SKIP].orEmpty(), r.headers[AndpHeaders.NOTIFY] == AndpHeaders.NOTIFY_ALARM)
                 return json(AndpJsonText.encodeToString(Receipt.serializer(), Receipt.sign(node, space, id, m.until)))
             }
             "GET" -> {
                 val o = lock.withLock { objects[k] }
+                // A held entry is not there for clients (ANDP §19 rule 4).
+                if (o != null && o.held) return json(AndpJsonText.encodeToString(NotFound.serializer(), NotFound(Andp.ERROR_NOT_FOUND, emptyList())), HttpStatusCode.NotFound)
                 if (o == null) {
                     if (lock.withLock { tombstones.containsKey(k) }) return fail(410, "gone")
                     val holders = net.holding(space, id).filter { it.node.key != node.key }.map { it.relay }
@@ -361,7 +417,7 @@ internal class FakeRelay(val node: SigningKey, val relay: Relay) {
                 } catch (e: AndpException) {
                     return fail(403, "forbidden")
                 }
-                lock.withLock {
+                if (!ignoreDeletes) lock.withLock {
                     tombstones[k] = t
                     objects.remove(k)
                 }

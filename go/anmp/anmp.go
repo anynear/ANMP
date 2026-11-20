@@ -15,6 +15,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 )
 
@@ -83,6 +84,15 @@ func HKDF(secret []byte, info string) []byte {
 		panic(err) // only for output lengths HKDF cannot give
 	}
 	return k
+}
+
+// AliveSosID is the ID of the call for the helpers a sign of life turns into when the alarm of its due (Unix seconds)
+// is due (ADR 0083 §5.4): the first 8 bytes of SHA-256("anmp/v1/alive-sos" ‖ plan ‖ due as 8 bytes big-endian). The
+// helpers' own deadline, the phone and the alarm it left at the relays all name the same call with it.
+func AliveSosID(plan []byte, due int64) []byte {
+	var d [8]byte
+	binary.BigEndian.PutUint64(d[:], uint64(due))
+	return sha([]byte("anmp/v1/alive-sos"), plan, d[:])[:8]
 }
 
 func sha(parts ...[]byte) []byte {

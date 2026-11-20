@@ -59,7 +59,17 @@
     "cbor": {
         "headerCircle": "a3000101487a0d43cd6a5d70d70302",
         "headerDirect": "a3000201487a0d43cd6a5d70d702482eaa81c8f4c890b2",
-        "content": "a30048a0a1a2a3a4a5a6a7011a68e77800026548616c6c6f"
+        "content": "a30048a0a1a2a3a4a5a6a7011a68e77800026548616c6c6f",
+        "contentPosition": "a2011a68e77800182aa2000301a4001a0007a572011a00015325021a68e777c4030f",
+        "contentPositionArea": "a2011a68e77800182aa4000201a3001a0007a56c011a00015310021a68e77800021905dc031a68e78610",
+        "contentSpot": "a3011a68e77800027818547265666670756e6b743a20486175707465696e67616e67182ba3000101a3001a0007a572011a00015325021a68e77800026c486175707465696e67616e67",
+        "contentSos": "a30048a0a1a2a3a4a5a6a7011a68e77800182ca60048a0a1a2a3a4a5a6a7010102a4001a0007a572011a00015325021a68e77800030903182a0481a3001a0007a508011a000152ac021a68e775a8051a68e77800",
+        "contentSosAlive": "a30048e0e1e2e3e4e5e6e7011a68e77ddc182ca60048da744b365f181c24010102a4001a0007a572011a00015325021a68e77c38030c031850051a68e77ddc0648a0a1a2a3a4a5a6a7",
+        "contentSpotAll": "a3011a68e77800026b416c6c65207465696c656e182ba20004031a68e79420",
+        "contentPositionNamed": "a2011a68e77800182aa4000301a3001a0007a572011a00015325021a68e7780005685a75204861757365061a68e769f0",
+        "contentDirectPlace": "a40048a0a1a2a3a4a5a6a7011a68e77800026d42696e20676c65696368206461182aa2000301a4001a0007a572011a00015325021a68e778000309",
+        "contentMetaPlaces": "a2011a68e7780010a8006746616d696c6965011b000001a3185c5000025001010101010101010101010101010101040005400681a50048070707070707070701685a75204861757365021a0007a572031a00015325041896071b000001a3185c51f4085001010101010101010101010101010101",
+        "contentPositionAsk": "a2011a68e77800182aa2000004f5"
     },
     "packets": {
         "circleSigned": {
@@ -313,6 +323,18 @@
                     "conv": "hold",
                     "radio": false,
                     "open": false
+                },
+                {
+                    "code": 30,
+                    "conv": "position",
+                    "radio": true,
+                    "open": false
+                },
+                {
+                    "code": 31,
+                    "conv": "sos",
+                    "radio": true,
+                    "open": false
                 }
             ]
         },
@@ -365,6 +387,33 @@
             "size": 207,
             "labelBytes": 32
         },
+        "aliveMissedPacket": {
+            "comment": "ADR 0121 §10: the plan of alivePacket in state missed (4) with the place of the phone in field 12 (50.1106 N, 8.6821 E, accuracy 12 m), public form, signed, circle key, nonce 12",
+            "scope": "circle-1",
+            "header": "a400181b0148763b6064e3c56679030306481fca78e1c9f96f86",
+            "content": "a30048c0c1c2c3c4c5c6c7011a68e77c741823ac0048a0a1a2a3a4a5a6a70104021a68e77800031a68e7e880041a68e77b840519012c061902580719038408f5096757616e6465726e0a18500ca4001a0007a572011a00015325021a68e77c38030c",
+            "packet": "414e0182581aa400181b0148763b6064e3c56679030306481fca78e1c9f96f8658c3f0f1f2f3f4f5f6f7f8f9fa1215cec383d5b36f2b89c3aa0e8e550361c45c747325a55011f1e50f66072b553f1f79cb1135e88d5517c05b9f0a6490748affa128adfbfe6bf9af755236dea38f8d97a9f73834051f7ad7f70e5d0b54f9341694d77c024a7d4b943efde0f01e4ea7e2982bd1bc679790c0d8e026edcdd2a8270833bf0f04be165a9a66003ffe45dcbf272556bf6da94b972322ec9f29d2652f22d7bf622dac7dcf0b9b4671e1b702b789fbe46b3d7842aaa8c8006af6fea94dc3337319ba",
+            "opened": "83581aa400181b0148763b6064e3c56679030306481fca78e1c9f96f865862a30048c0c1c2c3c4c5c6c7011a68e77c741823ac0048a0a1a2a3a4a5a6a70104021a68e77800031a68e7e880041a68e77b840519012c061902580719038408f5096757616e6465726e0a18500ca4001a0007a572011a00015325021a68e77c38030c58404bc44da934e7be3d394ced99ae5ebf3408fbd48c5d993b796cca2df3a9ee84793cc0a8f8f43f180a8ed92e97a82e6b8b1773b535ec236f1457e073936c663f0a",
+            "size": 229
+        },
+        "aliveGuard": {
+            "comment": "ADR 0083 §5.7: the alarm a phone leaves at the relays with alivePacket, never sent over radio: the same plan and sender time, state missed (4), field 13 true, field 14 true (the phone raises the call itself), the place the phone knows in field 12, and in field 44 the call the alarm stands for (state 1, ID radio.aliveSos.id, place, battery 80, one place of the trail, start due + alarm, field 6 the plan). notBefore is ANDP-Not-Before of its entry, due + alarm",
+            "content": "a40048d0d1d2d3d4d5d6d7011a68e778001823ae0048a0a1a2a3a4a5a6a70104021a68e77800031a68e7e880041a68e77b840519012c061902580719038408f5096757616e6465726e0a18500ca4001a0007a572011a00015325021a68e777c4030c0df50ef5182ca70048da744b365f181c24010102a4001a0007a572011a00015325021a68e777c4030c0318500481a3001a0007a508011a000152ac021a68e7756c051a68e77ddc0648a0a1a2a3a4a5a6a7",
+            "notBefore": 1760001500
+        },
+        "aliveWatch": {
+            "comment": "ADR 0121 §23: the start of a sign of life for one person, sent like a direct message, with field 15 the secret of the plan's own space. space is the circle space of that secret (Ed25519 public key); the guard is left there in the form of a circle packet with scope = the plan ID in b64u",
+            "secret": "707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f",
+            "content": "a30048a0a1a2a3a4a5a6a7011a68e778001823aa0048a0a1a2a3a4a5a6a70101021a68e77800031a68e7e880041a68e77b840519012c0619025807190384096757616e6465726e0f5820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f",
+            "space": "5ef2a279cd014790ef4338190a1c8f771446f82d1e0cceee5286de9a84c00b76",
+            "scope": "oKGio6Slpqc"
+        },
+        "aliveSos": {
+            "comment": "ADR 0083 §5.4: the ID of the call the plan of alivePacket turns into when the alarm of its due is due: SHA-256(\"anmp/v1/alive-sos\" ‖ plan ‖ due as 8 bytes big-endian), first 8 bytes",
+            "plan": "a0a1a2a3a4a5a6a7",
+            "due": 1760000900,
+            "id": "da744b365f181c24"
+        },
         "carePacket": {
             "comment": "ADR 0083: deviceB answers the plan of alivePacket with looking (1), public form, signed by deviceB, nonce 11",
             "scope": "circle-1",
@@ -382,6 +431,10 @@
             {
                 "name": "careWithoutState",
                 "content": "a11824a10048a0a1a2a3a4a5a6a7"
+            },
+            {
+                "name": "alivePositionWithoutTime",
+                "content": "a11823a90048a0a1a2a3a4a5a6a701040201030204010501060107183c0ca200010101"
             }
         ],
         "publicForm": [

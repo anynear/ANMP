@@ -3,11 +3,13 @@ package app.anynear.anmp.core
 import app.anynear.anmp.AnmpAlive
 import app.anynear.anmp.AnmpAliveState
 import app.anynear.anmp.AnmpCareState
+import app.anynear.anmp.AnmpPosition
 import kotlinx.serialization.Serializable
 import kotlin.js.JsExport
+import kotlin.math.roundToInt
 
 /**
- * A sign of life in a circle (ADR 0083 §5), as this device knows it: an own one ([owner] is the own person)
+ * A sign of life in a circle or for one person ([peer]) (ADR 0083 §5), as this device knows it: an own one ([owner] is the own person)
  * or one we watch as a helper. Times in ms; [due], [start] and [until] by the sender's clock. Kept in the core state.
  */
 @JsExport
@@ -46,8 +48,57 @@ data class AlivePlan(
     internal val sentMids: List<String> = emptyList(),
     /** Own plans: packets sent since the last receipt. */
     val unconfirmed: Int = 0,
+    /**
+     * Where the owner's phone is (ADR 0121 §10). Own plans: the place the app handed in last ([AnmpCore.aliveSetPosition]),
+     * sent only with „nicht bestätigt“. Plans of others: the place of the newest packet; gone with the next packet
+     * that carries none.
+     */
+    val position: AlivePosition? = null,
+    /**
+     * Plans of others: the relays released the alarm the owner's phone had left with them (ADR 0083 §5.7), and nothing
+     * newer came from the phone: it is off or has no network. Gone with the next sign of life.
+     */
+    val guard: Boolean = false,
+    /** Own plans: the alarms this phone left at the relays and has not seen deleted yet, as `space/entry`, newest last. */
+    internal val guards: List<String> = emptyList(),
+    /** Own plans: where the phone was before [position], oldest first, for the call the helpers get if nobody confirms. */
+    internal val trail: List<AlivePosition> = emptyList(),
+    /**
+     * A sign of life for one person instead of a circle ([circleId] is empty then): the other person, i.e. the helper
+     * of an own plan and the owner of one we watch. `null` for a plan in a circle.
+     */
+    val peer: String? = null,
+    /**
+     * Plans for one person: the secret (b64u, 32 bytes) of the space where the owner's phone leaves the alarm for the
+     * relays and the helper reads it ([app.anynear.anmp.AnmpAlive.watch]).
+     */
+    internal val watch: String? = null,
 ) {
     val ended: Boolean get() = state == AnmpAliveState.END || state == AnmpAliveState.TIMEOUT
+}
+
+/**
+ * A place as the apps use it (ADR 0121 §10): [latitude] and [longitude] in degrees, [at] when the device located it
+ * (ms), [accuracy] in metres if known. On the wire it is rounded to about 10 m ([AnmpPosition]).
+ */
+@JsExport
+@Serializable
+data class AlivePosition(val latitude: Double, val longitude: Double, val at: Long, val accuracy: Int? = null) {
+    /** On earth and located at some time; anything else is not taken. */
+    val valid: Boolean
+        get() = latitude.isFinite() && longitude.isFinite() && latitude in -90.0..90.0 && longitude in -180.0..180.0 && at > 0
+
+    internal fun toWire(): AnmpPosition = AnmpPosition(
+        (latitude * AnmpPosition.SCALE).roundToInt(), (longitude * AnmpPosition.SCALE).roundToInt(), at / 1000,
+        accuracy?.coerceIn(0, AnmpPosition.MAX_ACC),
+    )
+
+    internal companion object {
+        /** The place of a packet; `null` if it carries none or one out of range. */
+        fun of(p: AnmpPosition?): AlivePosition? = p?.takeIf { it.plausible }?.let {
+            AlivePosition(it.lat.toDouble() / AnmpPosition.SCALE, it.lon.toDouble() / AnmpPosition.SCALE, it.at * 1000, it.acc)
+        }
+    }
 }
 
 /** A helper's answer ([AnmpCareState]) or, in [AlivePlan.heard], a receipt ([state] 0), with time (ms). */
@@ -116,6 +167,18 @@ object AliveLogic {
     /** The phone asks again after this, louder. */
     const val ASK_AGAIN = 2 * 60_000L
 
+    /**
+     * When the relays release the alarm an own phone leaves with every sign of life (ADR 0083 §5.7): when the helpers'
+     * own deadline rings, [alarm] after [due]. Seconds, as on the wire.
+     */
+    fun guardAt(due: Long, alarm: Int): Long = due + alarm
+
+    /** An alarm that would be released sooner than this after it is written is not left at the relays. */
+    const val GUARD_MIN_AHEAD = 30_000L
+
+    /** How long a released alarm stays at the relays for helpers who were offline. */
+    const val GUARD_KEPT = 7 * 24 * 3_600_000L
+
     /** Movement counts again only after half the quiet time, so a moving phone does not send all the time. */
     fun movingWorthSending(plan: AlivePlan, now: Long): Boolean = now - plan.lastAt >= plan.quiet / 2
 
@@ -141,13 +204,18 @@ object AliveLogic {
             val (phase, next) = when {
                 now >= plan.until -> AliveStatus.ASK to 0L
                 now < plan.due -> AliveStatus.RUNNING to plan.due
-                else -> AliveStatus.ASK to (if (plan.state == AnmpAliveState.MISSED) plan.until else missedAt(plan)).coerceAtLeast(now)
+                // After „nicht bestätigt“ the next step is the call for the helpers, when their alarm is due.
+                plan.state == AnmpAliveState.MISSED -> AliveStatus.ASK to (if (now < plan.due + plan.alarm) plan.due + plan.alarm else plan.until)
+                else -> AliveStatus.ASK to missedAt(plan).coerceAtLeast(now)
             }
             return AliveStatus(plan, true, phase, AliveStatus.REASON_NONE, if (now >= plan.until) 0 else minOf(next, plan.until), looking, away, notArriving)
         }
         val reason = if (plan.state == AnmpAliveState.MISSED) AliveStatus.REASON_MISSED else AliveStatus.REASON_UNREACHABLE
         // A helper who said „Ich kann gerade nicht“ gets neither hint nor alarm; the owner knows (ADR 0083 §5.3).
         if (me in away) return AliveStatus(plan, false, AliveStatus.RUNNING, AliveStatus.REASON_NONE, 0, looking, away, false)
+        // The relays released the phone's own alarm (ADR 0083 §5.7): it is the same alarm as the one of this device's
+        // deadline, also if this device's clock is a little behind.
+        if (plan.guard) return AliveStatus(plan, false, AliveStatus.ALARM, reason, 0, looking, away, false)
         return when {
             plan.state == AnmpAliveState.MISSED && now >= plan.due + plan.hint -> alarmOrHint(plan, now, reason, looking, away)
             now < plan.due + plan.hint -> AliveStatus(plan, false, AliveStatus.RUNNING, AliveStatus.REASON_NONE, plan.due + plan.hint, looking, away, false)

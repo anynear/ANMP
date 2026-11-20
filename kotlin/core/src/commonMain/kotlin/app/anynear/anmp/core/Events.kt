@@ -44,6 +44,8 @@ sealed class CoreEvent {
         val replyFrom: String? = null,
         /** The sender passed on a message it got („Weitergeleitet“, content field 38, ADR 0118); no origin. */
         val passedOn: Boolean = false,
+        /** A meeting point, „Wo bist du?“ or the answer to it (ADR 0121 §8). */
+        val spot: MessageSpot? = null,
         /** A contact introduced to us in this message (ADR 0116); [text] is only its stand-in for older apps. */
         val intro: Intro? = null,
         /** From a person that asks to become a contact and is not yet one (ADR 0116 §7): no notification, shown with the request. */
@@ -101,10 +103,39 @@ sealed class CoreEvent {
      */
     class AliveChanged(val planId: String, val circleId: String) : CoreEvent()
 
+    /** What [person] shares of its place with us changed (ADR 0121 §3); read it with [AnmpCore.places]. */
+    class PlaceChanged(val person: String) : CoreEvent()
+
+    /** The places of the circle changed (ADR 0121 §21); read them with [AnmpCore.circlePlaces]. */
+    class CirclePlacesChanged(val circleId: String) : CoreEvent()
+
+    /** A call for the helpers changed (ADR 0083 §2): raised, updated, answered or ended; read it with [AnmpCore.sosCalls]. */
+    class SosChanged(val id: String, val owner: String) : CoreEvent()
+
+    /**
+     * A call for the helpers, found by the iOS notification extension ([AnmpCore.wakeFetch], ADR 0117): raised by hand,
+     * or from a sign of life nobody confirmed ([plan], ADR 0083 §5.4). Only reported, not stored. Only calls that count:
+     * running, not confirmed since, not for a helper who said it cannot look. [id] is the call, [circleId] the circle
+     * it came through (`null`: directly).
+     */
+    class SosWake(
+        val objectId: String,
+        val id: String,
+        val circleId: String?,
+        val owner: String,
+        val plan: String?,
+        val timestampMillis: Long,
+    ) : CoreEvent()
+
+    /** [person] asks to be shown where we are (ADR 0121 §4.4). Nothing is answered by itself. */
+    class PlaceAsked(val person: String, val timestampMillis: Long) : CoreEvent()
+
     /**
      * A sign of life of another person, found by the iOS notification extension ([AnmpCore.wakeFetch], ADR 0117). Only
      * reported, not stored: the app takes the packet over when it fetches itself. [owner] is the person of the plan,
-     * [timestampMillis] the time of the packet, [objectId] the ANDP object of the wake-up.
+     * [timestampMillis] the time of the packet, [objectId] the ANDP object of the wake-up. [call]: the ID of the call
+     * for the helpers this packet's alarm is ([AnmpCore.sosCalls], ADR 0083 §5.4), for a packet that says nobody
+     * confirmed and for an alarm the relays released; otherwise `null`.
      */
     class AliveWake(
         val objectId: String,
@@ -112,6 +143,7 @@ sealed class CoreEvent {
         val owner: String,
         val alive: app.anynear.anmp.AnmpAlive,
         val timestampMillis: Long,
+        val call: String? = null,
     ) : CoreEvent()
 
     /**
@@ -138,6 +170,8 @@ sealed class CoreEvent {
         /** As in [Message] (ADR 0092); over radio only if it fitted next to the text. */
         val replyTo: String? = null,
         val replyFrom: String? = null,
+        /** As in [Message] (ADR 0121 §8); over radio only if it fitted. */
+        val spot: MessageSpot? = null,
     ) : CoreEvent()
 
     /** An own other device read [mids] in [conversation] (ADR 0042): mark them read here, too. */

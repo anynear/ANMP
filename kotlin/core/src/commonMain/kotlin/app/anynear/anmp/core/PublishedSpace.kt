@@ -64,6 +64,31 @@ internal class PublishedSpace(
         if (answered) found.values.toList() else null
     }
 
+    /**
+     * The object [id] of the space from any holder, e.g. a map package named in a list (ADR 0121 §11). `null` if no
+     * holder has it, it is larger than [maxBytes] or the bytes are not the object.
+     */
+    suspend fun get(id: String, maxBytes: Long): ByteArray? = lock.withLock {
+        net.await(LIST_WAIT) ?: return@withLock null
+        val wanted = runCatching { ID.parse(id) }.getOrNull() ?: return@withLock null
+        val writer = reader ?: SigningKey.generate().also { reader = it }
+        for (relay in net.holders(space.toString())) {
+            val client = pool.client(relay) ?: continue
+            try {
+                val bytes = client.get(Credentials(writer, grant), space, wanted).data
+                pool.ok(relay.node)
+                if (bytes.size <= maxBytes && ID.of(bytes).toString() == id) return@withLock bytes
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: AndpHttpException) {
+                pool.ok(relay.node)
+            } catch (e: Exception) {
+                pool.failed(relay.node)
+            }
+        }
+        null
+    }
+
     companion object {
         private const val PAGE = 200
 

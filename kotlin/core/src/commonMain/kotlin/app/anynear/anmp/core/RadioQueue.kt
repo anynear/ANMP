@@ -28,6 +28,10 @@ internal data class RadioQueued(
     /** Answer to this message ID and author tag (b64u, ADR 0092); goes along over radio only if it fits. */
     val replyTo: String? = null,
     val replyFrom: String? = null,
+    /** A place that goes along if it fits (ADR 0121 §8); missing in entries queued before. */
+    val spot: MessageSpot? = null,
+    /** Direct only: what the reader sees of the sender's place, goes along if it fits (ADR 0121 §20). */
+    val place: PlaceShare? = null,
     /** Not before this time (Unix ms): online, the internet goes first (ADR 0087). 0: at once. */
     val notBefore: Long = 0,
     /** Hop limit of the next send; `null`: from [RadioHops] for the target. */
@@ -97,6 +101,30 @@ internal enum class HeardBy { APP, RADIO, CHECK }
  * it is no longer wanted ([RadioHost.stillWanted]). A send the radio provably never took (never
  * [RadioSendState.HANDED]) is repeated quietly. The packet is built when it goes out, with the tags of that hour.
  */
+/**
+ * The order in which packets get the radio (ADR 0083 §7, ADR 0121 §13). The radio network is slow and shared, so what
+ * matters most goes first. Internal: it is no field of a packet and says nothing to other devices.
+ */
+internal enum class RadioPriority {
+    /** A call for the helpers and the answers to it: before everything, and kept until the radio is there. */
+    FIRST,
+
+    /** Signs of life and what people write: in the order they came. */
+    MESSAGE,
+
+    /** Where someone is: only when no message waits. */
+    LAST,
+    ;
+
+    companion object {
+        fun of(kind: app.anynear.anmp.AnmpKind): RadioPriority = when (kind) {
+            app.anynear.anmp.AnmpKind.SOS -> FIRST
+            app.anynear.anmp.AnmpKind.POSITION -> LAST
+            else -> MESSAGE
+        }
+    }
+}
+
 internal class RadioQueue(
     private val scope: CoroutineScope,
     private val store: KeyValueStore,
@@ -110,6 +138,11 @@ internal class RadioQueue(
     private val nodesOf: (RadioQueued) -> Set<Int>,
     private val log: (String) -> Unit,
     private val now: () -> Long,
+    /**
+     * What goes before every queued message ([RadioPriority.FIRST], a call for the helpers): sent first whenever the
+     * queue gets its turn.
+     */
+    private val first: suspend () -> Unit = {},
     private val random: kotlin.random.Random = kotlin.random.Random.Default,
 ) {
     private val hops = RadioHops(store, now, timings.hopMemory.inWholeMilliseconds)
@@ -140,6 +173,14 @@ internal class RadioQueue(
 
     /** `true` if an entry matching [predicate] waits. */
     suspend fun has(predicate: (RadioQueued) -> Boolean): Boolean = lock.withLock { queue.any(predicate) }
+
+    /** `true` while a message waits for its first way out: packets of [RadioPriority.LAST] stand back then. */
+    suspend fun busy(): Boolean = lock.withLock { val t = now(); queue.any { !it.waiting && it.notBefore <= t } }
+
+    /** Gives the queue its turn, e.g. after something of [RadioPriority.FIRST] was handed in. */
+    fun kick() {
+        wake.trySend(Unit)
+    }
 
     suspend fun add(entry: RadioQueued) {
         // Online the internet goes first: over radio only if no receipt came in time (ADR 0087).
@@ -256,6 +297,7 @@ internal class RadioQueue(
     private suspend fun drain() {
         cleanup()
         while (port.ready.value) {
+            first()
             val t = now()
             val next = lock.withLock { queue.firstOrNull { !it.waiting && it.notBefore <= t } } ?: run {
                 lock.withLock { queue.filter { !it.waiting }.minOfOrNull { it.notBefore } }?.let(::wakeAt)

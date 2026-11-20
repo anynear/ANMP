@@ -45,6 +45,10 @@ const (
 	KindCare  Kind = 28
 	// ADR 0088: receipt entry with the refs of a message without expiry; readers drop it.
 	KindHold Kind = 29
+	// ADR 0121: where the sender's person is, for one other person; also over radio, seldom.
+	KindPosition Kind = 30
+	// ADR 0083 §2: a person calls its helpers, or a helper answers; in a circle also over radio.
+	KindSos Kind = 31
 )
 
 var kindConv = map[Kind]string{
@@ -54,6 +58,7 @@ var kindConv = map[Kind]string{
 	KindAsk: "ask", KindPatron: "patron", KindPickup: "pickup",
 	KindSubscribe: "subscribe", KindUnsubscribe: "unsubscribe", KindChannelKey: "channel-key",
 	KindDelete: "delete", KindAlive: "alive", KindCare: "care", KindHold: "hold",
+	KindPosition: "position", KindSos: "sos",
 }
 
 // Known reports whether k is a kind of ANMP v1; readers drop packets of unknown kinds.
@@ -75,7 +80,7 @@ func (k Kind) Open() bool { return k == KindAsk || k == KindPatron }
 // exchange; everything else waits for the internet.
 func (k Kind) Radio() bool {
 	switch k {
-	case KindCircle, KindDirect, KindReact, KindDelete, KindRead, KindReceipt, KindAsk, KindPatron, KindPickup, KindAlive, KindCare:
+	case KindCircle, KindDirect, KindReact, KindDelete, KindRead, KindReceipt, KindAsk, KindPatron, KindPickup, KindAlive, KindCare, KindSos, KindPosition:
 		return true
 	}
 	return false
@@ -149,6 +154,57 @@ type Alive struct {
 	Motion  bool    `cbor:"8,keyasint,omitempty"` // movement counts as a sign of life
 	Label   *string `cbor:"9,keyasint,omitempty"` // name of the template, at most 40 characters; over radio left out if it does not fit
 	Battery *int64  `cbor:"10,keyasint,omitempty"`
+	// Position is where the sender's phone is (ADR 0121 §10): only in a packet with state missed and only if the
+	// person allowed it. Field 11 is reserved.
+	Position *Position `cbor:"12,keyasint,omitempty"`
+}
+
+// Position is a place on earth (ADR 0121 §10): Lat and Lon in degrees × 10 000, north and east positive (about
+// 10 m), At the time the device located it in Unix seconds, Acc the accuracy in metres if known. Fields 0–2 are
+// required.
+type Position struct {
+	Lat int64  `cbor:"0,keyasint"`
+	Lon int64  `cbor:"1,keyasint"`
+	At  int64  `cbor:"2,keyasint"`
+	Acc *int64 `cbor:"3,keyasint,omitempty"`
+}
+
+// Limits of a position: degrees × PositionScale on the wire, an accuracy of at most PositionMaxAcc metres.
+const (
+	PositionScale  = 10000
+	PositionMaxAcc = 100000
+)
+
+type positionWire Position
+
+// UnmarshalCBOR rejects a position without latitude, longitude or time, or with 32-bit fields out of range.
+func (p *Position) UnmarshalCBOR(data []byte) error {
+	if err := requireKeys(data, 3); err != nil {
+		return err
+	}
+	var w positionWire
+	if err := decMode.Unmarshal(data, &w); err != nil {
+		return err
+	}
+	for _, n := range []int64{w.Lat, w.Lon} {
+		if n < math.MinInt32 || n > math.MaxInt32 {
+			return errors.New("position: number out of range")
+		}
+	}
+	if w.Acc != nil && (*w.Acc < math.MinInt32 || *w.Acc > math.MaxInt32) {
+		return errors.New("position: accuracy out of range")
+	}
+	*p = Position(w)
+	return nil
+}
+
+// Plausible reports a position on earth, located at some time, with an accuracy of at most PositionMaxAcc metres.
+// Readers ignore any other position and keep the packet.
+func (p *Position) Plausible() bool {
+	if p.Lat < -90*PositionScale || p.Lat > 90*PositionScale || p.Lon < -180*PositionScale || p.Lon > 180*PositionScale {
+		return false
+	}
+	return p.At > 0 && (p.Acc == nil || (*p.Acc >= 0 && *p.Acc <= PositionMaxAcc))
 }
 
 // Care is a helper's answer to a sign of life (content field 36, ADR 0083 §4): 1 looking, 2 away, 3 back. Both

@@ -51,7 +51,7 @@ class RadioWayTest {
 
     @Test
     fun radioRule() {
-        for (kind in listOf(AnmpKind.CIRCLE, AnmpKind.DIRECT, AnmpKind.REACT, AnmpKind.DELETE, AnmpKind.READ, AnmpKind.RECEIPT, AnmpKind.ALIVE, AnmpKind.CARE, AnmpKind.ASK, AnmpKind.PATRON, AnmpKind.PICKUP)) {
+        for (kind in listOf(AnmpKind.CIRCLE, AnmpKind.DIRECT, AnmpKind.REACT, AnmpKind.DELETE, AnmpKind.READ, AnmpKind.RECEIPT, AnmpKind.ALIVE, AnmpKind.CARE, AnmpKind.SOS, AnmpKind.POSITION, AnmpKind.ASK, AnmpKind.PATRON, AnmpKind.PICKUP)) {
             assertTrue(kind.radio, "${kind.conv} over radio")
         }
         for (kind in listOf(AnmpKind.MEMBER, AnmpKind.META, AnmpKind.PROFILE, AnmpKind.WANT, AnmpKind.HAVE, AnmpKind.HISTORY, AnmpKind.LEFT, AnmpKind.REKEY, AnmpKind.REMOVED, AnmpKind.SYNC)) {
@@ -665,5 +665,97 @@ class RadioWayTest {
         val mid2 = newMid()
         assertNotNull(a.core.sendRadioPacket(assertNotNull(a.core.radioTextPacket(circle.id, null, mid2, 1_700_000_000_000, long, first, b.info.tag))))
         assertNull(b.await<CoreEvent.RadioMessage> { it.mid == mid2 }.replyTo)
+    }
+
+    /** ADR 0121 §13: places work without internet, too: a meeting point, a shared place and a call for the helpers. */
+    @Test
+    fun placesGoOverRadioSeldomAndACallForHelpersAtOnce() = world {
+        val a = device("Anna")
+        val b = device("Ben")
+        val circle = circleOf(a, b)
+        val air = FakeAir()
+        a.radio(air)
+        b.radio(air)
+        net.relays.forEach { it.offline = true }
+        val now = Clock.System.now().toEpochMilliseconds()
+        val here = AlivePosition(50.110649, 8.682127, at = now, accuracy = 9)
+
+        // A meeting point: the card arrives, with the first line of the text for older apps.
+        val mid = newMid()
+        val spot = MessageSpot(app.anynear.anmp.AnmpSpot.MEET, here, "Haupteingang")
+        val packet = assertNotNull(a.core.radioTextPacket(circle.id, null, mid, now, "Treffpunkt: Haupteingang\nhttps://www.openstreetmap.org/?mlat=50.11065&mlon=8.68213#map=17/50.11065/8.68213", spot = spot))
+        assertTrue(Anmp.fitsRadio(packet))
+        assertNotNull(a.core.sendRadioPacket(packet))
+        val got = b.await<CoreEvent.RadioMessage> { it.mid == mid }
+        assertEquals("Treffpunkt: Haupteingang", got.text)
+        assertEquals("Haupteingang", got.spot?.label)
+        assertEquals(50.1106, got.spot!!.position!!.latitude, 0.00001)
+
+        // A shared place: the first packet at once, a new place right after it waits for the next turn.
+        a.core.sharePlace(b.info.personId, app.anynear.anmp.AnmpPlace.EXACT, here)
+        b.await<CoreEvent.PlaceChanged>(30.seconds) { it.person == a.info.personId }
+        assertEquals(50.1106, b.core.places().single().position!!.latitude, 0.00001)
+        val sent = air.sent.count { (_, p) -> Anmp.peek(p)?.kind == AnmpKind.POSITION }
+        assertEquals(1, sent)
+        a.core.sharePlace(b.info.personId, app.anynear.anmp.AnmpPlace.EXACT, AlivePosition(50.2, 8.7, at = now + 1000))
+        delay(500.milliseconds)
+        assertEquals(sent, air.sent.count { (_, p) -> Anmp.peek(p)?.kind == AnmpKind.POSITION })
+        // A change of the level is no movement: it goes out at once.
+        a.core.sharePlace(b.info.personId, app.anynear.anmp.AnmpPlace.WHEN)
+        eventually { b.core.places().single().level == app.anynear.anmp.AnmpPlace.WHEN }
+
+        // A call for the helpers in the circle, and the answer back, without internet.
+        a.core.raiseSos(listOf(circle.id), emptyList(), here, battery = 30)
+        b.await<CoreEvent.SosChanged>(30.seconds) { it.owner == a.info.personId }
+        val call = b.core.sosCalls().single()
+        assertEquals(30, call.battery)
+        assertEquals(50.1106, call.position!!.latitude, 0.00001)
+        b.core.careSos(call.id)
+        eventually { a.core.sosCalls().any { it.caring == listOf(b.info.personId) } }
+        assertTrue(air.sent.filter { (_, p) -> Anmp.peek(p)?.kind in setOf(AnmpKind.SOS, AnmpKind.POSITION) }.all { (_, p) -> Anmp.fitsRadio(p) })
+    }
+
+    /** ADR 0121 §23: a sign of life for one person, the answer and a call go to that person over radio, without internet. */
+    @Test
+    fun aSignOfLifeForOnePersonAndACallGoOverRadio() = world {
+        val a = device("Anna")
+        val b = device("Ben")
+        circleOf(a, b)
+        val air = FakeAir()
+        a.radio(air)
+        b.radio(air)
+        net.relays.forEach { it.offline = true }
+        val now = Clock.System.now().toEpochMilliseconds()
+        val plan = assertNotNull(a.core.startAlive("", "Wandern", until = now + 3_600_000L, quiet = AliveLogic.MIN_QUIET, person = b.info.personId))
+        b.await<CoreEvent.AliveChanged>(30.seconds) { it.planId == plan.id }
+        val seen = assertNotNull(b.core.aliveStatus(plan.id)).plan
+        assertEquals(a.info.personId, seen.peer)
+        assertEquals("", seen.circleId)
+        assertEquals("Wandern", seen.label)
+        // Ben's radio receipt reaches Anna, and his answer too.
+        eventually { a.core.aliveStatus(plan.id)?.plan?.heard?.any { it.person == b.info.personId } == true }
+        assertTrue(b.core.careAlive(plan.id, AnmpCareState.LOOKING))
+        eventually { a.core.aliveStatus(plan.id)?.plan?.care?.any { it.person == b.info.personId && it.state == AnmpCareState.LOOKING } == true }
+        assertTrue(a.core.endAlive(plan.id))
+        eventually { b.core.aliveStatus(plan.id)?.plan?.state == AnmpAliveState.END }
+
+        // A call for one person, and the answer back.
+        val id = assertNotNull(a.core.raiseSos(emptyList(), listOf(b.info.personId), AlivePosition(50.110649, 8.682127, at = now, accuracy = 9), battery = 30))
+        b.await<CoreEvent.SosChanged>(30.seconds) { it.id == id }
+        val call = b.core.sosCalls().single()
+        assertNull(call.via)
+        assertEquals(30, call.battery)
+        assertTrue(b.core.careSos(id))
+        eventually { a.core.sosCalls().any { it.caring == listOf(b.info.personId) } }
+        assertTrue(air.sent.filter { (_, p) -> Anmp.peek(p)?.kind in setOf(AnmpKind.ALIVE, AnmpKind.CARE, AnmpKind.SOS) }.all { (_, p) -> Anmp.fitsRadio(p) })
+    }
+
+    /** ADR 0083 §7: a call for the helpers gets the radio before everything else; a place stands back. */
+    @Test
+    fun packetsHaveAnOrder() {
+        assertEquals(RadioPriority.FIRST, RadioPriority.of(AnmpKind.SOS))
+        assertEquals(RadioPriority.LAST, RadioPriority.of(AnmpKind.POSITION))
+        for (kind in listOf(AnmpKind.CIRCLE, AnmpKind.DIRECT, AnmpKind.ALIVE, AnmpKind.CARE, AnmpKind.REACT)) assertEquals(RadioPriority.MESSAGE, RadioPriority.of(kind))
+        assertTrue(RadioPriority.FIRST < RadioPriority.MESSAGE && RadioPriority.MESSAGE < RadioPriority.LAST)
     }
 }

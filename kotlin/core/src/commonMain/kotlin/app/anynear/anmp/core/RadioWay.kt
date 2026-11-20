@@ -4,6 +4,9 @@ import app.anynear.andp.B64
 import app.anynear.anmp.Anmp
 import app.anynear.anmp.AnmpAlive
 import app.anynear.anmp.AnmpAliveState
+import app.anynear.anmp.AnmpPlace
+import app.anynear.anmp.AnmpPosition
+import app.anynear.anmp.AnmpSos
 import app.anynear.anmp.AnmpArrived
 import app.anynear.anmp.AnmpCare
 import app.anynear.anmp.AnmpContent
@@ -57,6 +60,12 @@ internal interface RadioCore {
      * valid and of another person, so the radio way confirms it.
      */
     suspend fun onAlive(circleId: String, fromDevice: String, mid: ByteArray?, ts: Long, alive: AnmpAlive): Boolean
+
+    /** A call for the helpers or an answer to it heard over radio in [circleId] (ADR 0083 §7), taken like one from the internet. */
+    suspend fun onSos(circleId: String, fromDevice: String, ts: Long, sos: AnmpSos)
+
+    /** What [fromDevice]'s person shares of its place, heard over radio (ADR 0121 §13), taken like one from the internet. */
+    suspend fun onPlace(fromDevice: String, ts: Long, place: AnmpPlace)
 
     /** A helper's answer [care] heard over radio in [circleId] (ADR 0083), taken like one from the internet. */
     suspend fun onCare(circleId: String, fromDevice: String, ts: Long, care: AnmpCare)
@@ -119,11 +128,12 @@ internal class RadioWay(
 
     private val queue = RadioQueue(
         scope, core.store, port, host, timings,
-        packet = { textPacket(it.circleId, it.deviceId, it.mid, it.ts, it.text, it.replyTo, it.replyFrom) },
+        packet = { textPacket(it.circleId, it.deviceId, it.mid, it.ts, it.text, it.replyTo, it.replyFrom, it.spot, it.place) },
         report = { mid, packetId, state -> core.emit(CoreEvent.RadioSend(mid, packetId, state)) },
         nodesOf = ::nodesOf,
         log = core::log,
         now = core::nowMillis,
+        first = ::sendFirst,
     )
 
     /**
@@ -194,6 +204,31 @@ internal class RadioWay(
         }
     }
 
+    private val firstLock = Mutex()
+    private val firstPackets = ArrayDeque<ByteArray>()
+
+    /**
+     * Sends a packet of [RadioPriority.FIRST] now, before every queued message. If the radio is not there, the packet
+     * waits (the newest [FIRST_KEPT]) and goes out as the first thing when it is back.
+     */
+    private suspend fun sendUrgent(packet: ByteArray): RadioSent? {
+        send(packet)?.let { return it }
+        firstLock.withLock {
+            firstPackets.addLast(packet)
+            while (firstPackets.size > FIRST_KEPT) firstPackets.removeFirst()
+        }
+        return null
+    }
+
+    /** What waits with [RadioPriority.FIRST] goes out; called by the queue before each of its messages. */
+    private suspend fun sendFirst() {
+        while (true) {
+            val packet = firstLock.withLock { firstPackets.firstOrNull() } ?: return
+            send(packet) ?: return
+            firstLock.withLock { firstPackets.remove(packet) }
+        }
+    }
+
     // --- Sending ------------------------------------------------------------------------------------
 
     private fun circle(circleId: String): CircleState? = core.circles.firstOrNull { it.id == circleId }
@@ -213,14 +248,21 @@ internal class RadioWay(
      */
     suspend fun textPacket(
         circleId: String?, deviceId: String?, mid: String, tsMillis: Long, text: String, replyTo: String? = null, replyFrom: String? = null,
+        /** A meeting point, „Wo bist du?“ or the answer (ADR 0121 §8): goes along if it fits, then with only the first line of [text]. */
+        spot: MessageSpot? = null,
+        /** Direct only: what the reader sees of the sender's place (ADR 0121 §20); goes along if it fits, before the own radio. */
+        share: PlaceShare? = null,
     ): ByteArray? {
         val id = midBytes(mid) ?: return null
         val ref = replyTo?.let(::midBytes)
         val refFrom = replyFrom?.let { runCatching { B64.decode(it) }.getOrNull()?.takeIf { b -> b.size == Anmp.TAG_BYTES } }
-        suspend fun packet(node: Long?, reply: Boolean): ByteArray? {
+        suspend fun packet(node: Long?, reply: Boolean, place: MessageSpot? = null, shared: AnmpPlace? = null): ByteArray? {
             val content = AnmpContent(
-                id = id, ts = tsMillis / 1000, text = text, node = node,
+                // With the place the card says it all: the text is only what an older app shows, its first line is enough.
+                id = id, ts = tsMillis / 1000, text = if (place != null) text.substringBefore('\n') else text, node = node,
                 ref = ref.takeIf { reply && refFrom != null }, refFrom = refFrom.takeIf { reply && ref != null },
+                spot = place?.toWire()?.takeIf { it.plausible },
+                place = shared.takeIf { circleId == null },
             )
             return if (circleId != null) {
                 check(AnmpKind.CIRCLE)
@@ -237,6 +279,17 @@ internal class RadioWay(
         val reply = ref != null && refFrom != null
         val tries = listOf(node to reply, null to reply, node to false, null to false).distinct()
             .filter { (n, r) -> (n == null || node != null) && (!r || reply) }
+        // The place first: with it, then without the accuracy; without it the text alone goes as before.
+        if (spot != null) {
+            for (place in listOf(spot, spot.copy(position = spot.position?.copy(accuracy = null)), spot.copy(label = null))) {
+                packet(null, false, place)?.takeIf(Anmp::fitsRadio)?.let { return it }
+            }
+        }
+        // The sender's place for the reader: with the answer reference kept; then without the name and the accuracy.
+        share?.toWire()?.takeIf { circleId == null }?.let { full ->
+            val bare = AnmpPlace(full.level, full.position?.let { AnmpPosition(it.lat, it.lon, it.at) }, full.radius, full.until)
+            for (p in listOf(full, bare)) for (n in listOf(node, null).distinct()) packet(n, reply, shared = p)?.takeIf(Anmp::fitsRadio)?.let { return it }
+        }
         for ((n, r) in tries) packet(n, r)?.takeIf(Anmp::fitsRadio)?.let { return it }
         return null
     }
@@ -280,9 +333,10 @@ internal class RadioWay(
     /**
      * Own sign of life [alive] in [circleId] over radio (ADR 0083 §7), with the message ID [mid] and time [tsSeconds]
      * of the internet packet, so readers merge both. Signed like every circle packet, without queue: if the radio is not
-     * there or it does not fit, it goes only over the internet. When the whole plan does not fit, the label stays
-     * behind (readers keep the one they know). Confirmations (ok, moving) go at most once per [ALIVE_CONFIRM_GAP_MILLIS]
-     * and plan (radio budget); start, missed, battery, end and timeout always.
+     * there or it does not fit, it goes only over the internet. When the whole plan does not fit, first the label stays
+     * behind (readers keep the one they know), then the place (ADR 0121 §10; readers take it from the internet copy).
+     * Confirmations (ok, moving) go at most once per [ALIVE_CONFIRM_GAP_MILLIS] and plan (radio budget); start, missed,
+     * battery, end and timeout always.
      */
     suspend fun alive(circleId: String, mid: ByteArray, tsSeconds: Long, alive: AnmpAlive): RadioSent? {
         check(AnmpKind.ALIVE)
@@ -291,10 +345,15 @@ internal class RadioWay(
         val plan = hex(alive.plan)
         val now = core.nowMillis()
         if (confirming && aliveLock.withLock { aliveSent[plan]?.let { now - it < ALIVE_CONFIRM_GAP_MILLIS } == true }) return null
-        val bare = AnmpAlive(
-            alive.plan, alive.state, alive.start, alive.until, alive.due, alive.hint, alive.alarm, alive.quiet, alive.motion, null, alive.battery,
+        fun without(label: Boolean, position: Boolean) = AnmpAlive(
+            alive.plan, alive.state, alive.start, alive.until, alive.due, alive.hint, alive.alarm, alive.quiet, alive.motion,
+            alive.label.takeIf { !label }, alive.battery, alive.position.takeIf { !position },
         )
-        val packet = listOfNotNull(alive, bare.takeIf { alive.label != null }).firstNotNullOfOrNull { a ->
+        val smaller = listOfNotNull(
+            without(label = true, position = false).takeIf { alive.label != null },
+            without(label = true, position = true).takeIf { alive.position != null },
+        )
+        val packet = (listOf(alive) + smaller).firstNotNullOfOrNull { a ->
             core.keys.circlePacket(AnmpKind.ALIVE, circle, AnmpContent(id = mid, ts = tsSeconds, alive = a)).takeIf(Anmp::fitsRadio)
         } ?: return null.also { core.log("radio: sign of life does not fit") }
         val sent = send(packet) ?: return null
@@ -312,6 +371,116 @@ internal class RadioWay(
         val packet = core.keys.circlePacket(AnmpKind.CARE, circle, AnmpContent(id = mid, ts = tsSeconds, care = care)).takeIf(Anmp::fitsRadio) ?: return null
         return send(packet)
     }
+
+    /**
+     * Own sign of life for one person over radio (ADR 0121 §23): a direct packet to each of its devices [deviceIds],
+     * with the same message ID as over the internet. Confirmations at most once per 15 minutes, like in a circle;
+     * what does not fit stays behind, first the label, then the place. `true` if a packet went out.
+     */
+    suspend fun aliveTo(deviceIds: Collection<String>, mid: ByteArray, tsSeconds: Long, alive: AnmpAlive): Boolean {
+        check(AnmpKind.ALIVE)
+        val confirming = alive.state == AnmpAliveState.OK || alive.state == AnmpAliveState.MOVING
+        val plan = hex(alive.plan)
+        val now = core.nowMillis()
+        if (confirming && aliveLock.withLock { aliveSent[plan]?.let { now - it < ALIVE_CONFIRM_GAP_MILLIS } == true }) return false
+        fun without(label: Boolean, position: Boolean) = AnmpAlive(
+            alive.plan, alive.state, alive.start, alive.until, alive.due, alive.hint, alive.alarm, alive.quiet, alive.motion,
+            alive.label.takeIf { !label }, alive.battery, alive.position.takeIf { !position },
+        )
+        val forms = listOf(alive) + listOfNotNull(
+            without(label = true, position = false).takeIf { alive.label != null },
+            without(label = true, position = true).takeIf { alive.position != null },
+        )
+        var any = false
+        for (device in deviceIds) {
+            val packet = forms.firstNotNullOfOrNull { a -> directPacket(AnmpKind.ALIVE, device, AnmpContent(id = mid, ts = tsSeconds, alive = a))?.takeIf(Anmp::fitsRadio) } ?: continue
+            if (send(packet) != null) any = true
+        }
+        if (any) aliveLock.withLock {
+            aliveSent[plan] = now
+            while (aliveSent.size > MAX_PLANS) aliveSent.remove(aliveSent.keys.first())
+        }
+        return any
+    }
+
+    /** A helper's answer to a sign of life that goes to it alone, to the devices [deviceIds] of its owner (ADR 0121 §23). */
+    suspend fun careTo(deviceIds: Collection<String>, mid: ByteArray, tsSeconds: Long, care: AnmpCare): Boolean {
+        check(AnmpKind.CARE)
+        var any = false
+        for (device in deviceIds) {
+            val packet = directPacket(AnmpKind.CARE, device, AnmpContent(id = mid, ts = tsSeconds, care = care))?.takeIf(Anmp::fitsRadio) ?: continue
+            if (send(packet) != null) any = true
+        }
+        return any
+    }
+
+    /**
+     * A call for the helpers or an answer to one, to the devices [deviceIds] of a single person over radio
+     * (ADR 0121 §23): before everything else, like a call in a circle. What does not fit stays behind as there.
+     */
+    suspend fun sosTo(deviceIds: Collection<String>, mid: ByteArray, tsSeconds: Long, sos: AnmpSos): Boolean {
+        check(AnmpKind.SOS)
+        val shorter = listOf(
+            sos,
+            AnmpSos(sos.id, sos.state, sos.position, sos.battery, null, sos.start, sos.plan),
+            AnmpSos(sos.id, sos.state, sos.position?.let { AnmpPosition(it.lat, it.lon, it.at) }, null, null, null),
+        )
+        var any = false
+        for (device in deviceIds) {
+            val packet = shorter.firstNotNullOfOrNull { s -> directPacket(AnmpKind.SOS, device, AnmpContent(id = mid, ts = tsSeconds, sos = s))?.takeIf(Anmp::fitsRadio) } ?: continue
+            if (sendUrgent(packet).also { if (it == null) queue.kick() } != null) any = true
+        }
+        return any
+    }
+
+    /**
+     * Own call for the helpers or answer to one in [circleId] over radio (ADR 0083 §7). What does not fit stays
+     * behind: first the trail, then battery, the accuracy of the place, the start and the plan (a call that comes from a
+     * sign of life is known by its ID anyway).
+     */
+    suspend fun sos(circleId: String, mid: ByteArray, tsSeconds: Long, sos: AnmpSos): RadioSent? {
+        check(AnmpKind.SOS)
+        val circle = circle(circleId) ?: return null
+        val shorter = listOf(
+            sos,
+            AnmpSos(sos.id, sos.state, sos.position, sos.battery, null, sos.start, sos.plan),
+            AnmpSos(sos.id, sos.state, sos.position?.let { AnmpPosition(it.lat, it.lon, it.at) }, null, null, null),
+        )
+        val packet = shorter.firstNotNullOfOrNull { s ->
+            core.keys.circlePacket(AnmpKind.SOS, circle, AnmpContent(id = mid, ts = tsSeconds, sos = s)).takeIf(Anmp::fitsRadio)
+        } ?: return null.also { core.log("radio: call for helpers does not fit") }
+        // Before everything else (ADR 0083 §7); if the radio is away, it waits and the queue sends it first.
+        return sendUrgent(packet).also { if (it == null) queue.kick() }
+    }
+
+    /**
+     * What the own person shares of its place with the devices [deviceIds] of one person, over radio (ADR 0121 §13).
+     * The radio network is shared and slow: one packet per device, and for the same person at most once per
+     * [PLACE_GAP_MILLIS] unless [urgent] (the level changed, a request, an answer to one). `true` if a packet went out.
+     */
+    suspend fun place(person: String, deviceIds: Collection<String>, tsSeconds: Long, place: AnmpPlace, urgent: Boolean): Boolean {
+        check(AnmpKind.POSITION)
+        val now = core.nowMillis()
+        if (!urgent && aliveLock.withLock { placeSent[person]?.let { now - it < PLACE_GAP_MILLIS } == true }) return false
+        // A place stands back while a message waits for the radio ([RadioPriority.LAST]).
+        if (queue.busy()) return false
+        var any = false
+        for (device in deviceIds) {
+            // Without the accuracy if the packet is too large with it.
+            // Without the name of the place and the accuracy if the packet is too large with them.
+            val packet = listOf(place, AnmpPlace(place.level, place.position?.let { AnmpPosition(it.lat, it.lon, it.at) }, place.radius, place.until, place.ask))
+                .firstNotNullOfOrNull { p -> directPacket(AnmpKind.POSITION, device, AnmpContent(id = Anmp.newMessageId(), ts = tsSeconds, place = p))?.takeIf(Anmp::fitsRadio) }
+                ?: continue
+            if (send(packet) != null) any = true
+        }
+        if (any) aliveLock.withLock {
+            placeSent[person] = now
+            while (placeSent.size > MAX_PLANS) placeSent.remove(placeSent.keys.first())
+        }
+        return any
+    }
+
+    private val placeSent = LinkedHashMap<String, Long>()
 
     private val aliveLock = Mutex()
     private val aliveSent = LinkedHashMap<String, Long>()
@@ -449,8 +618,11 @@ internal class RadioWay(
                         relayed = fromInbox,
                         replyTo = replyOf(content)?.first,
                         replyFrom = replyOf(content)?.second,
+                        spot = MessageSpot.of(content.spot),
                     ),
                 )
+                // A place that rode along with a direct message (ADR 0121 §20), like a kind position.
+                if (circle == null) content.place?.let { core.onPlace(sender.deviceId, content.ts, it) }
                 // Even if the internet was faster: the sender should see that radio arrived, too (ADR 0003, 0058). Also in
                 // a circle, so that a sender with only radio sees who got it.
                 if (firstReceipt(sender.deviceId, mid)) receipts.add(sender.deviceId, id, frame.hops.takeIf { !fromInbox })
@@ -464,14 +636,26 @@ internal class RadioWay(
             AnmpKind.DELETE -> core.deleteEvent(conversation, sender.deviceId, content)?.let { core.emit(it) }
             AnmpKind.ALIVE -> {
                 val alive = content.alive ?: return
-                if (circle == null || !core.onAlive(circle.id, sender.deviceId, content.id, content.ts, alive)) return
+                // In a circle, or as a direct packet for this person alone (empty circle ID, ADR 0121 §23).
+                if (!core.onAlive(circle?.id.orEmpty(), sender.deviceId, content.id, content.ts, alive)) return
                 // Confirmed over radio like a circle message, so an owner without internet sees that it arrived (ADR 0083 §5.1).
                 val id = content.id?.takeIf { it.size == Anmp.ID_BYTES } ?: return
                 if (firstReceipt(sender.deviceId, B64.encode(id))) receipts.add(sender.deviceId, id, frame.hops.takeIf { !fromInbox })
             }
+            AnmpKind.POSITION -> {
+                val place = content.place ?: return
+                if (circle == null) core.onPlace(sender.deviceId, content.ts, place)
+            }
+            AnmpKind.SOS -> {
+                val sos = content.sos ?: return
+                core.onSos(circle?.id.orEmpty(), sender.deviceId, content.ts, sos)
+                // Confirmed over radio like a circle message, so a caller without internet sees that it arrived (ADR 0083 §3.4).
+                val id = content.id?.takeIf { it.size == Anmp.ID_BYTES }
+                if (sos.state == AnmpSos.RAISED && id != null && firstReceipt(sender.deviceId, B64.encode(id))) receipts.add(sender.deviceId, id, frame.hops.takeIf { !fromInbox })
+            }
             AnmpKind.CARE -> {
                 val care = content.care ?: return
-                if (circle != null) core.onCare(circle.id, sender.deviceId, content.ts, care)
+                core.onCare(circle?.id.orEmpty(), sender.deviceId, content.ts, care)
             }
             AnmpKind.READ, AnmpKind.RECEIPT -> {
                 val mids = content.ids.orEmpty().map(B64::encode)
@@ -507,6 +691,12 @@ internal class RadioWay(
 
         /** Signs of life over radio: confirmations of one plan at most this often (ADR 0083 §7, 15 minutes). */
         internal const val ALIVE_CONFIRM_GAP_MILLIS = 15L * 60 * 1000
+
+        /** A shared place over radio: for one person at most this often (ADR 0121 §13, ADR 0024: 15 minutes). */
+        internal const val PLACE_GAP_MILLIS = 15L * 60 * 1000
+
+        /** How many packets of [RadioPriority.FIRST] wait for a radio that is away. */
+        private const val FIRST_KEPT = 4
 
         private const val MAX_PLANS = 64
 

@@ -40,6 +40,17 @@ class AnmpCoreConfig(
     val radioSoftwareSpace: String = RADIO_SOFTWARE_SPACE,
     /** Grant for anyone (read, list) of [radioSoftwareSpace], wire form; `""` like the space. */
     val radioSoftwareGrant: String = RADIO_SOFTWARE_GRANT,
+    /**
+     * Space of the map lists (ADR 0121 §11), `""` while it is not set up: only the small root lists that name the
+     * list of every region. Kept apart from the tiles, so that reading it never means reading thousands of objects.
+     */
+    val mapSpace: String = "",
+    /** Grant for anyone (read, list) of [mapSpace], wire form; `""` like the space. */
+    val mapGrant: String = "",
+    /** Space of the lists per region and of the tiles themselves, each an object of its own, fetched by its ID. */
+    val mapDataSpace: String = "",
+    /** Grant for anyone (read) of [mapDataSpace], wire form; `""` like the space. */
+    val mapDataGrant: String = "",
     /** Host of the device addresses of channels (`https://<host>/<token>`, ADR 0062 §4). */
     val ingressHost: String = INGRESS_HOST,
     /**
@@ -161,6 +172,11 @@ data class CoreTimings(
     val linkGrantLifetime: Duration = 30.days,
     /** Lifetime of the write grant in a published contact link (ADR 0084 §6), e.g. the one built into the apps for support. */
     val publicLinkGrantLifetime: Duration = 365.days,
+    /**
+     * An alarm the relays released for a sign of life (ADR 0083 §5.7) counts although this device's clock is this much
+     * behind its time; earlier it is ignored, so a relay that releases too early rings nobody.
+     */
+    val aliveGuardEarly: Duration = 5.minutes,
     /** Expiry of entries that are not kept for ever (capped by the relay's max_until): receipts, read states, sync. */
     val entryLifetime: Duration = 30.days,
     /**

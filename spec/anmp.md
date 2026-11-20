@@ -382,15 +382,20 @@ expire after a day at the latest. Over radio one packet goes to every device of 
 message; because the radio network is shared and slow, a sender sends a place for the same person at most every
 15 minutes, and at once only when the level or its end changed, for a request and for an answer to one. An area suits
 radio well: it changes seldom. Without room the accuracy stays behind. Vectors: `cbor.contentPosition`, `cbor.contentPositionArea`,
-`cbor.contentPositionAsk`, `cbor.contentPositionNamed`; for field 43 `cbor.contentSpot`, `cbor.contentSpotAll`.
+`cbor.contentPositionAsk`, `cbor.contentPositionNamed`; for field 43 `cbor.contentSpot`, `cbor.contentSpotAll`, `cbor.contentSpotArrived`, `cbor.contentSpotShare`.
 
 **Spot** (ADR 0121 §8): a circle or direct message may carry a place for everyone in the conversation (field 43),
 which apps show as a card that opens the map. Field 0 is the kind: 1 a meeting point (field 1 the place, field 2 an
 optional name of at most 60 characters), 2 the question where the reader is (no place), 3 the sender's place as the
 answer (field 1), 4 the invitation to everyone in the circle to share their place until field 3 (seconds since 1970;
-no place). Kind 4 shares nothing by itself: whoever agrees sends its place with the kind `position` to the members,
+no place), 5 that the sender arrived where it was going (field 1 the place, field 2 an optional name; ADR 0121
+§26), 6 the question whether both show each other their place for good (field 4 the level, 2 or 3 as in the kind
+`position`; the sender shows its own place at that level from then on; ADR 0121 §28), 7 the answer to it (field 4 the
+level the answering person now shows, 0 for no; after a no the asker takes back what it showed for the question).
+Kind 7 is also sent later, without a question before it, by whoever lowers or ends what it shows of what both agreed
+on; the reader then shows at most the same. A kind 7 never makes a reader show more than it does. Kind 4 shares nothing by itself: whoever agrees sends its place with the kind `position` to the members,
 limited to that time, and may stop at any time. Field 2 of the content carries a text for apps that do not know field 43. Readers ignore a spot of
-an unknown kind, a kind 1 or 3 without a plausible place and a kind 4 without field 3, and keep the message. A spot is one place at one time;
+an unknown kind, a kind 1, 3 or 5 without a plausible place, a kind 6 or 7 without a level it knows and a kind 4 without field 3, and keep the message. A spot is one place at one time;
 a place that follows the sender is the kind `position`. Over radio the spot goes along if the packet has room, then
 with only the first line of the text; without room first the accuracy stays behind, then the name, then the spot,
 and the text alone goes as before.
@@ -401,7 +406,7 @@ over radio) and, like a direct message, to every chosen person that is in none o
 | Field | Name | Type | Meaning |
 |---|---|---|---|
 | 0 | id | bstr 8 | names the call, random |
-| 1 | state | uint | 1 raised (the first packet and every update), 2 ended (the all-clear), 3 a helper looks after it. Unknown → drop the packet |
+| 1 | state | uint | 1 raised (the first packet and every update), 2 ended (the all-clear), 3 a helper looks after it; 4 to 6 see **Contacts for calls**. Unknown → drop the packet |
 | 2 | position | position | where the person is now |
 | 3 | battery | uint | battery in percent (0…100) |
 | 4 | trail | [* position] | where the phone was before, oldest first, at most 10 |
@@ -417,6 +422,15 @@ for a single person goes there as a direct radio packet to each of its devices.
 A sender gives the radio to a call before every waiting message, keeps it until the radio is there, and lets a
 `position` wait while a message waits. That order is local; no field of a packet carries it.
 Vector: `cbor.contentSos`.
+
+**Contacts for calls** (ADR 0121 §25): being someone's contact needs a yes, once, so that nobody can make other
+people's phones ring. State 4 asks: sent into a circle or to a person like a call, with field 0 only (a random ID);
+it wakes like a message. State 5 (yes) and 6 (no) answer it and go to the asker alone, never into a circle; a later 6
+takes a yes back. A reader that said yes before answers a new question with 5 by itself. A question without
+an answer is sent again after a day, not sooner: a reader that did not know state 4 yet dropped it. An answer counts only from
+someone the reader asked. The check is the reader's: a call (state 1) from a person the reader did not say yes to is
+shown, but must not ring loudly. That holds for calls from a sign of life as well. Apps that do not know these states
+drop the packets. Not over radio. Vector: `cbor.contentSosAsk`.
 
 **A call from a sign of life** (ADR 0083 §5.4, ADR 0121 §22): when the alarm of a sign of life is due (`due` + `alarm`
 without a confirmation), it is a call for the helpers of that circle. Its ID is not random, so that everyone names

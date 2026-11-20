@@ -402,13 +402,22 @@ class AnmpSos(
     @CborLabel(6) val plan: ByteArray? = null,
 ) {
     val plausible: Boolean
-        get() = id.size == 8 && state in RAISED..CARING && (battery == null || battery in 0..100) &&
+        get() = id.size == 8 && state in RAISED..REFUSE && (battery == null || battery in 0..100) &&
             (trail == null || trail.size <= MAX_TRAIL) && (start == null || start > 0) && (plan == null || plan.size == 8)
 
     companion object {
         const val RAISED = 1
         const val ENDED = 2
         const val CARING = 3
+
+        /**
+         * Being someone's contact for calls needs a yes, once (ADR 0121 §25): [ASK] the sender asks the readers to be
+         * its contacts, [AGREE] and [REFUSE] are a reader's answer, sent to the asker alone; a later [REFUSE] takes a
+         * yes back. Only field 0 is set, a random ID.
+         */
+        const val ASK = 4
+        const val AGREE = 5
+        const val REFUSE = 6
         const val MAX_TRAIL = 10
 
         /**
@@ -438,10 +447,14 @@ class AnmpSpot(
     @CborLabel(2) val label: String? = null,
     /** [ALL]: until when everyone who joins shares its place, seconds since 1970. */
     @CborLabel(3) val until: Long? = null,
+    /** [SHARE]: the level asked for; [SHARED]: the level agreed to, 0 for no. Levels as in [AnmpPlace]. */
+    @CborLabel(4) val level: Int? = null,
 ) {
     val plausible: Boolean
         get() = when (kind) {
-            MEET, HERE -> position?.plausible == true
+            MEET, HERE, ARRIVED -> position?.plausible == true
+            SHARE -> level == AnmpPlace.AREA || level == AnmpPlace.EXACT
+            SHARED -> level == AnmpPlace.OFF || level == AnmpPlace.AREA || level == AnmpPlace.EXACT
             ASK -> true
             ALL -> until != null && until > 0
             else -> false
@@ -454,6 +467,18 @@ class AnmpSpot(
 
         /** „Alle teilen“ (ADR 0121 §13): the sender invites everyone in the circle to share its place until [until]. */
         const val ALL = 4
+
+        /** The sender arrived where it was going (ADR 0121 §26): [position] the place, [label] its name if it has one. */
+        const val ARRIVED = 5
+
+        /**
+         * The sender asks the reader that both see each other's place for good, at [level] (ADR 0121 §28). The sender
+         * shows its own place at that level from then on; the reader decides.
+         */
+        const val SHARE = 6
+
+        /** The answer to [SHARE]: [level] is what the sender of the answer now shows, 0 for no. */
+        const val SHARED = 7
         const val MAX_LABEL = 60
     }
 }

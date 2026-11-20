@@ -11,8 +11,8 @@ import kotlin.test.assertTrue
 
 /** ADR 0121 §3–§5: what a person shares of its place goes to single persons, never to the circle. */
 class PlaceFlowTest {
-    private suspend fun World.three(): Triple<Device, Device, Device> {
-        val a = device("Anna")
+    private suspend fun World.three(clock: CoreClock = CoreClock.SYSTEM): Triple<Device, Device, Device> {
+        val a = device("Anna", clock = clock)
         val b = device("Ben")
         val c = device("Tom")
         val circle = a.core.createCircle("Familie")
@@ -139,6 +139,72 @@ class PlaceFlowTest {
         assertTrue(!a.core.setCirclePlaces(circle.id, listOf(home.copy(radius = 0))))
         assertTrue(!a.core.setCirclePlaces(circle.id, listOf(home.copy(id = "x"))))
         assertTrue(!a.core.setCirclePlaces("nope", listOf(home)))
+    }
+
+    /** ADR 0121 §25: a question nobody answered may have been dropped by an app that did not know it; it is asked again after a day. */
+    @Test
+    fun aContactWhoDidNotAnswerIsAskedAgainAfterADay() = world {
+        val clock = object : CoreClock {
+            var shift = 0L
+
+            override fun nowMillis(): Long = CoreClock.SYSTEM.nowMillis() + shift
+        }
+        val (a, b, c) = three(clock)
+        val circle = a.core.circles.value.single()
+        assertTrue(a.core.askSosContacts(listOf(circle.id), emptyList()))
+        eventually { b.core.sosAsks().size == 1 && c.core.sosAsks().size == 1 }
+        assertTrue(b.core.answerSosAsk(a.info.personId, true))
+        eventually { a.core.sosContacts().first { it.person == b.info.personId }.state == SosContact.AGREED }
+
+        // Within the day nothing goes out again.
+        clock.shift = AnmpCore.SOS_REASK_MILLIS - 60_000L
+        assertTrue(!a.core.askSosContacts(listOf(circle.id), emptyList()))
+        // After it Tom, who did not answer, is asked again; Ben's yes stays and he is listed once.
+        clock.shift = AnmpCore.SOS_REASK_MILLIS + 60_000L
+        assertTrue(a.core.askSosContacts(listOf(circle.id), emptyList()))
+        assertEquals(SosContact.AGREED, a.core.sosContacts().single { it.person == b.info.personId }.state)
+        assertEquals(SosContact.ASKED, a.core.sosContacts().single { it.person == c.info.personId }.state)
+        // Asked just now: not again right away.
+        assertTrue(!a.core.askSosContacts(listOf(circle.id), emptyList()))
+    }
+
+    @Test
+    fun beingAContactForCallsNeedsAYesOnce() = world {
+        val (a, b, c) = three()
+        val circle = a.core.circles.value.single()
+        assertTrue(a.core.askSosContacts(listOf(circle.id), emptyList()))
+        b.await<CoreEvent.SosAsked> { it.person == a.info.personId }
+        eventually { c.core.sosAsks().any { it.person == a.info.personId } }
+        assertEquals(circle.id, b.core.sosAsks().single().circleId)
+        // Anna sees whom she asked; nobody answered yet.
+        assertEquals(setOf(b.info.personId, c.info.personId), a.core.sosContacts().map { it.person }.toSet())
+        assertTrue(a.core.sosContacts().all { it.state == SosContact.ASKED })
+
+        // Ben says yes, Tom says no: both answers reach Anna alone.
+        assertTrue(b.core.answerSosAsk(a.info.personId, true))
+        assertTrue(c.core.answerSosAsk(a.info.personId, false))
+        eventually { a.core.sosContacts().first { it.person == b.info.personId }.state == SosContact.AGREED }
+        eventually { a.core.sosContacts().first { it.person == c.info.personId }.state == SosContact.REFUSED }
+        assertEquals(listOf(a.info.personId), b.core.sosAgreed())
+        assertTrue(c.core.sosAgreed().isEmpty())
+        assertTrue(b.core.sosAsks().isEmpty() && c.core.sosAsks().isEmpty())
+        // Nobody else learned an answer.
+        assertTrue(c.core.sosContacts().isEmpty())
+
+        // Asked once: a second time nothing goes out, unless on purpose. Ben then answers by himself.
+        assertTrue(!a.core.askSosContacts(listOf(circle.id), emptyList()))
+        assertTrue(a.core.askSosContacts(listOf(circle.id), emptyList(), again = true))
+        eventually { c.core.sosAsks().size == 1 }
+        assertTrue(b.core.sosAsks().isEmpty())
+
+        // Ben takes his yes back.
+        assertTrue(b.core.answerSosAsk(a.info.personId, false))
+        eventually { a.core.sosContacts().first { it.person == b.info.personId }.state == SosContact.REFUSED }
+        assertTrue(b.core.sosAgreed().isEmpty())
+        // An answer from someone Anna never asked is nothing.
+        assertTrue(a.core.answerSosAsk(b.info.personId, true))
+        eventually { a.core.sosAgreed() == listOf(b.info.personId) }
+        assertTrue(b.core.sosContacts().isEmpty())
     }
 
     @Test

@@ -3487,6 +3487,108 @@ class AnmpCore(
     /** The own call and those of persons we help; ended ones stay for a day. */
     fun sosCalls(): List<SosCall> = state.sos
 
+    // --- Contacts for calls need a yes (ADR 0121 §25) ---------------------------------------------
+
+    /** Whom the own person asked to be its contact for calls, and what they answered. */
+    fun sosContacts(): List<SosContact> = state.sosContacts
+
+    /** Who asked us and has no answer yet. */
+    fun sosAsks(): List<SosAsk> = state.sosAsks
+
+    /** The persons whose calls we agreed to be woken for. A call of anyone else is shown, but must not ring. */
+    fun sosAgreed(): List<String> = state.sosAgreed
+
+    /**
+     * Asks every member of [circleIds] and every person of [personIds] to be a contact for the own calls: who answered
+     * is not asked again, and who was asked less than [SOS_REASK_MILLIS] ago is not either, unless [again]. Someone
+     * without an answer is asked again after that time: its app may have been one that did not know the question yet
+     * and dropped it. Wakes like a message. `false` if nothing went out.
+     */
+    suspend fun askSosContacts(circleIds: List<String>, personIds: List<String>, again: Boolean = false): Boolean = onCore {
+        opened.await()
+        val now = now()
+        val known = state.sosContacts.filter { it.state != SosContact.ASKED || now - it.at < SOS_REASK_MILLIS }.map { it.person }.toSet()
+        var any = false
+        val asked = mutableSetOf<String>()
+        for (circleId in circleIds.distinct()) {
+            currentCircle(circleId) ?: continue
+            val members = state.members.filter { it.circleId == circleId }.map { personOf(it.deviceId) }.filter { it != ownPersonId }.toSet()
+            val open = if (again) members else members - known
+            if (open.isEmpty()) continue
+            val c = content(id = Anmp.newMessageId(), sos = AnmpSos(Anmp.newMessageId(), AnmpSos.ASK), ts = now / 1000)
+            if (postCircle(circleId, AnmpKind.SOS, c, notify = true) != null) {
+                any = true
+                asked += open
+            }
+        }
+        for (person in personIds.map { personOf(it) }.distinct().filter { it != ownPersonId && it !in asked && (again || it !in known) }) {
+            val c = content(id = Anmp.newMessageId(), sos = AnmpSos(Anmp.newMessageId(), AnmpSos.ASK), ts = now / 1000)
+            if (postPerson(person, AnmpKind.SOS, c, notify = true)) {
+                any = true
+                asked += person
+            }
+        }
+        if (asked.isNotEmpty()) {
+            // An answer we have stays; who has none is noted as asked, with the time of this question.
+            update { s ->
+                val open = asked.filter { p -> s.sosContacts.none { it.person == p && it.state != SosContact.ASKED } }
+                s.copy(sosContacts = s.sosContacts.filter { it.person !in open } + open.map { SosContact(it, SosContact.ASKED, now) })
+            }
+            asked.forEach { emit(CoreEvent.SosContactsChanged(it)) }
+        }
+        return@onCore any
+    }
+
+    /**
+     * The own answer to [person]: [agree] to be woken by its calls, or not. Also later, to take a yes back. Goes to
+     * the person alone. `false` if it did not go out; then nothing changes here either.
+     */
+    suspend fun answerSosAsk(person: String, agree: Boolean): Boolean = onCore {
+        opened.await()
+        answerSos(personOf(person), agree)
+    }
+
+    private suspend fun answerSos(to: String, agree: Boolean): Boolean {
+        if (to == ownPersonId) return false
+        val c = content(id = Anmp.newMessageId(), sos = AnmpSos(Anmp.newMessageId(), if (agree) AnmpSos.AGREE else AnmpSos.REFUSE), ts = nowS())
+        if (!postPerson(to, AnmpKind.SOS, c)) return false
+        update { s -> s.copy(sosAgreed = if (agree) (s.sosAgreed + to).distinct() else s.sosAgreed - to, sosAsks = s.sosAsks.filter { it.person != to }) }
+        emit(CoreEvent.SosContactsChanged(to))
+        return true
+    }
+
+    /** No longer a contact of ours, e.g. taken out of the list: forgotten here; its yes for our calls is not needed any more. */
+    suspend fun forgetSosContact(person: String): Boolean = onCore {
+        val to = personOf(person)
+        if (state.sosContacts.none { it.person == to }) return@onCore false
+        update { s -> s.copy(sosContacts = s.sosContacts.filter { it.person != to }) }
+        emit(CoreEvent.SosContactsChanged(to))
+        return@onCore true
+    }
+
+    private suspend fun onSosContact(person: String, circleId: String?, at: Long, st: Int) {
+        if (person == ownPersonId) return
+        when (st) {
+            AnmpSos.ASK -> when {
+                // Said yes before: the asker learns it again, nobody is asked twice.
+                // Right here and in order, so that a later no of the person is not overtaken by this yes.
+                person in state.sosAgreed -> answerSos(person, true)
+                state.sosAsks.none { it.person == person } -> {
+                    update { s -> s.copy(sosAsks = (s.sosAsks + SosAsk(person, at, circleId)).takeLast(SOS_ASKS_MAX)) }
+                    emit(CoreEvent.SosAsked(person, circleId))
+                }
+            }
+            // An answer counts only from someone we asked, and only sent to us alone.
+            AnmpSos.AGREE, AnmpSos.REFUSE -> {
+                val known = state.sosContacts.firstOrNull { it.person == person } ?: return
+                if (circleId != null || known.at > at && known.state != SosContact.ASKED) return
+                val next = SosContact(person, if (st == AnmpSos.AGREE) SosContact.AGREED else SosContact.REFUSED, at)
+                update { s -> s.copy(sosContacts = s.sosContacts.filter { it.person != person } + next) }
+                emit(CoreEvent.SosContactsChanged(person))
+            }
+        }
+    }
+
     /**
      * Calls the helpers (ADR 0083 §3): into every circle of [circleIds] (there also over radio) and to every person
      * of [personIds] that is in none of them, with a wake-up. [position], [battery] (percent) and [trail] (where the
@@ -3655,6 +3757,7 @@ class AnmpCore(
         if (!w.plausible) return
         val id = B64.encode(w.id)
         val at = ts * 1000
+        if (w.state >= AnmpSos.ASK) return onSosContact(person, circleId, at, w.state)
         val known = state.sos.firstOrNull { it.id == id }
         if (w.state == AnmpSos.CARING) {
             // An answer counts only for a call we know; whoever sees the call may answer.
@@ -6614,6 +6717,10 @@ class AnmpCore(
         /** A place on the relays is news for a day at most (ADR 0121 §5). */
         private val PLACE_LIFETIME = 1.days
         private const val SOS_MIDS = 30
+        private const val SOS_ASKS_MAX = 50
+
+        /** Someone asked to be a contact for calls who did not answer is asked again after this long. */
+        internal const val SOS_REASK_MILLIS = 24 * 3_600_000L
         /** A map tile or a list of a region is small; anything beyond this is not one. */
         const val MAP_PACKAGE_MAX = 4L shl 20
         private const val WAKE_SEEN_MAX = 300

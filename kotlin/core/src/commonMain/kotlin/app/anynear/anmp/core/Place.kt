@@ -77,14 +77,35 @@ data class MessageSpot(
     val label: String? = null,
     /** [AnmpSpot.ALL]: until when everyone who joins shares, ms. */
     val until: Long? = null,
+    /** [AnmpSpot.SHARE] and [AnmpSpot.SHARED]: the level asked for or agreed to (as in [AnmpPlace]), 0 for no. */
+    val level: Int? = null,
 ) {
-    internal fun toWire(): AnmpSpot = AnmpSpot(kind, position?.takeIf { it.valid }?.toWire(), label?.take(AnmpSpot.MAX_LABEL), until?.let { it / 1000 })
+    internal fun toWire(): AnmpSpot = AnmpSpot(kind, position?.takeIf { it.valid }?.toWire(), label?.take(AnmpSpot.MAX_LABEL), until?.let { it / 1000 }, level)
 
     companion object {
         internal fun of(s: AnmpSpot?): MessageSpot? =
-            s?.takeIf { it.plausible }?.let { MessageSpot(it.kind, AlivePosition.of(it.position), it.label, it.until?.let { u -> u * 1000 }) }
+            s?.takeIf { it.plausible }?.let { MessageSpot(it.kind, AlivePosition.of(it.position), it.label, it.until?.let { u -> u * 1000 }, it.level) }
     }
 }
+
+/**
+ * Someone the own person asked to be its contact for calls (ADR 0121 §25), and what it answered: [state] is
+ * [ASKED], [AGREED] or [REFUSED]. [at]: when asked or answered, ms.
+ */
+@JsExport
+@Serializable
+data class SosContact(val person: String, val state: Int, val at: Long) {
+    companion object {
+        const val ASKED = 1
+        const val AGREED = 2
+        const val REFUSED = 3
+    }
+}
+
+/** A person asks us to be its contact for calls, not answered yet; [circleId] if it asked a whole circle. */
+@JsExport
+@Serializable
+data class SosAsk(val person: String, val at: Long, val circleId: String? = null)
 
 /**
  * A call for the helpers as the apps use it (kind sos, ADR 0083 §2–§4): the own one, or one of a person we help.

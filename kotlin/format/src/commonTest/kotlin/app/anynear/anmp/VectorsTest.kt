@@ -247,9 +247,12 @@ class VectorsTest {
                 // A call that comes from a sign of life (ADR 0083 §5.4): field 6 names the plan, the ID is that of plan and due.
                 hex("contentSosAlive", Anmp.encodeContent(AnmpContent(id = ByteArray(8) { (0xE0 + it).toByte() }, ts = ts + 1500, sos = AnmpSos(sosAliveId, AnmpSos.RAISED, AnmpPosition(501106, 86821, ts + 1080, 12), 80, start = ts + 1500, plan = Fixtures.messageId))))
                 hex("contentSpotAll", Anmp.encodeContent(AnmpContent(ts = ts, text = "Alle teilen", spot = AnmpSpot(AnmpSpot.ALL, until = ts + 7200))))
+                hex("contentSpotArrived", Anmp.encodeContent(AnmpContent(ts = ts, text = "Ich bin angekommen.", spot = AnmpSpot(AnmpSpot.ARRIVED, AnmpPosition(501106, 86821, ts), "Zuhause"))))
+                hex("contentSpotShare", Anmp.encodeContent(AnmpContent(ts = ts, text = "Standort gegenseitig teilen", spot = AnmpSpot(AnmpSpot.SHARE, level = AnmpPlace.AREA))))
                 hex("contentPositionNamed", Anmp.encodeContent(AnmpContent(ts = ts, place = AnmpPlace(AnmpPlace.EXACT, AnmpPosition(501106, 86821, ts), label = "Zu Hause", since = ts - 3600))))
                 hex("contentDirectPlace", Anmp.encodeContent(AnmpContent(id = Fixtures.messageId, ts = ts, text = "Bin gleich da", place = AnmpPlace(AnmpPlace.EXACT, AnmpPosition(501106, 86821, ts, 9)))))
                 hex("contentMetaPlaces", Anmp.encodeContent(AnmpContent(ts = ts, meta = AnmpMeta("Familie", 1_800_000_000_000L, ByteArray(16) { 1 }, null, 0, ByteArray(0), listOf(AnmpCirclePlace(ByteArray(8) { 7 }, "Zu Hause", 501106, 86821, 150)), 1_800_000_000_500L, ByteArray(16) { 1 }))))
+                hex("contentSosAsk", Anmp.encodeContent(AnmpContent(id = Fixtures.messageId, ts = ts, sos = AnmpSos(Fixtures.messageId, AnmpSos.ASK))))
                 hex("contentPositionAsk", Anmp.encodeContent(AnmpContent(ts = ts, place = AnmpPlace(AnmpPlace.OFF, ask = true))))
             }
             putJsonObject("packets") {

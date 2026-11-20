@@ -224,6 +224,10 @@ internal data class CoreState(
     val placesSent: Map<String, String> = emptyMap(),
     /** Calls for the helpers: the own one and those of persons we help (kind sos, ADR 0083 §2). */
     val sos: List<SosCall> = emptyList(),
+    /** Contacts for calls (ADR 0121 §25): whom we asked and what they said; who asked us; whose calls we agreed to. */
+    val sosContacts: List<SosContact> = emptyList(),
+    val sosAsks: List<SosAsk> = emptyList(),
+    val sosAgreed: List<String> = emptyList(),
     /** Persons whose mailbox refuses us (every holder 403), with since when (ms): person ID → time (ADR 0046). */
     val unreachable: Map<String, Long> = emptyMap(),
     /** Persons asking to become a contact (ADR 0116), not yet answered. */

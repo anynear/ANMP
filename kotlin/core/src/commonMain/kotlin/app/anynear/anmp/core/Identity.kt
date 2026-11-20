@@ -127,6 +127,14 @@ internal sealed class Listed {
         override val scope: String get() = Anmp.DIRECT_SCOPE
     }
 
+    /**
+     * The space of a sign of life that goes to this person alone (ADR 0121 §23), derived from the plan's secret like a
+     * circle space: only the alarm the owner's phone left for the relays is read there. Scope is the plan ID.
+     */
+    class Watch(val planId: String, val keys: CircleKeys, override val access: SpaceAccess) : Listed() {
+        override val scope: String get() = planId
+    }
+
     /** A channel (ADR 0062): its entries are alert packets sealed to [readKey], without envelope. */
     class Channel(val channelId: String, val readKey: ByteArray, override val access: SpaceAccess) : Listed() {
         override val scope: String get() = Anmp.DIRECT_SCOPE

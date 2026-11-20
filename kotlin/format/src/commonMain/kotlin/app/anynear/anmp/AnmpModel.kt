@@ -98,6 +98,17 @@ enum class AnmpKind(val code: Int, val conv: String) {
      * they count on the space's quota only while they live (ADR 0088). Readers drop it.
      */
     HOLD(29, "hold"),
+    /**
+     * Where the sender's person is, for one other person ([AnmpContent.place]; ADR 0121 §3, §5): the level it shares at,
+     * a point or an area, or the request to be shown the reader's place. To every device of the person, never to a circle;
+     * also over radio, seldom (ADR 0121 §13).
+     */
+    POSITION(30, "position"),
+    /**
+     * A person calls its helpers, or a helper answers ([AnmpContent.sos]; ADR 0083 §2–§4, ADR 0121 §13): into a circle
+     * or to single persons, in a circle also over radio.
+     */
+    SOS(31, "sos"),
     ;
 
     /** `true` for kinds that are sent open, as header without ciphertext ([Anmp.encodeOpen]). */
@@ -109,7 +120,7 @@ enum class AnmpKind(val code: Int, val conv: String) {
      * everything else waits for the internet.
      */
     val radio: Boolean get() = this == CIRCLE || this == DIRECT || this == REACT || this == DELETE || this == READ || this == RECEIPT || this == ASK || this == PATRON || this == PICKUP ||
-            this == ALIVE || this == CARE
+            this == ALIVE || this == CARE || this == SOS || this == POSITION
 
     companion object {
         fun of(code: Int): AnmpKind? = entries.firstOrNull { it.code == code }
@@ -237,6 +248,12 @@ class AnmpContent(
     @CborLabel(40) val intro: AnmpIntro? = null,
     /** In a direct message: the reader of an introduction wants the contact (to the introducer), or the forwarded request (to the introduced person) (ADR 0116 §3). */
     @CborLabel(41) val introReply: AnmpIntroReply? = null,
+    /** Where the sender's person is and how much of it the reader sees (kind position, ADR 0121 §3). */
+    @CborLabel(42) val place: AnmpPlace? = null,
+    /** In a circle or direct message: a meeting point, the question „Wo bist du?“ or the answer to it (ADR 0121 §8). */
+    @CborLabel(43) val spot: AnmpSpot? = null,
+    /** A call for the helpers or a helper's answer to it (kind sos, ADR 0083 §2–§4); also over radio. */
+    @CborLabel(44) val sos: AnmpSos? = null,
 ) {
     /**
      * This content as an own copy in the conversation with the person [peer] (person ID, content 26), written by the own
@@ -330,7 +347,10 @@ class AnmpIntro(
  * [plan]: ID of the plan ([Anmp.ID_BYTES]), the message ID of its start; [state]: [AnmpAliveState];
  * [due]: the next sign of life comes at the latest then; [hint], [alarm]: after [due], helpers first get a hint, then
  * an alarm; [quiet]: how long the phone may lie still before it asks; [motion]: movement counts as a sign of life;
- * [until]: latest end; [label]: name of the template; [battery]: percent, if known.
+ * [until]: latest end; [label]: name of the template; [battery]: percent, if known; [position]: where the phone
+ * is, only in a packet that says nobody confirmed and only if the person allowed it (ADR 0121 §10). Label 11 is reserved.
+ * [guard]: the phone wrote this packet ahead and the relays kept it back until [due] + [alarm] (ADR 0083 §5.7): it
+ * says that nothing came from the phone since, and readers drop it if they know a newer packet of the plan.
  */
 @JsExport
 @Serializable
@@ -346,7 +366,164 @@ class AnmpAlive(
     @CborLabel(8) val motion: Boolean = false,
     @CborLabel(9) val label: String? = null,
     @CborLabel(10) val battery: Int? = null,
+    @CborLabel(12) val position: AnmpPosition? = null,
+    @CborLabel(13) val guard: Boolean = false,
+    /**
+     * In a packet that says nobody confirmed and in a guard: the sender's phone raises the call for the helpers itself
+     * when the alarm is due ([AnmpSos.plan]). A reader that only runs when a packet wakes it then waits for the call.
+     */
+    @CborLabel(14) val calls: Boolean = false,
+    /**
+     * Only for a sign of life that goes to one person: a random secret (32 bytes) both sides derive a space of their
+     * own from, like a circle from its secret. The sender leaves the guard there, where it can delete it again, and
+     * the helper reads it there (ADR 0083 §5.7, ADR 0121 §23).
+     */
+    @CborLabel(15) val watch: ByteArray? = null,
 )
+
+/**
+ * A person calls its helpers (kind sos, ADR 0083 §2–§4, ADR 0121 §13). [id] names the call; every packet of the person
+ * carries its whole state. [state]: [RAISED] it runs (the first packet and every update), [ENDED] the person gave the
+ * all-clear, [CARING] a helper says it looks after it (sent by the helper; the other fields are empty then).
+ * [position] is where the person is now, [trail] where it was before (oldest first, at most [MAX_TRAIL]), [battery] in
+ * percent, [start] when the call began (seconds since 1970). [plan]: the sign of life the call comes from, when nobody
+ * confirmed it; [id] is then [aliveId] of that plan and its `due`, so that the helpers' own deadline, the phone and the
+ * alarm the phone left at the relays all name the same call.
+ */
+@JsExport
+@Serializable
+class AnmpSos(
+    @CborLabel(0) val id: ByteArray,
+    @CborLabel(1) val state: Int,
+    @CborLabel(2) val position: AnmpPosition? = null,
+    @CborLabel(3) val battery: Int? = null,
+    @CborLabel(4) val trail: List<AnmpPosition>? = null,
+    @CborLabel(5) val start: Long? = null,
+    @CborLabel(6) val plan: ByteArray? = null,
+) {
+    val plausible: Boolean
+        get() = id.size == 8 && state in RAISED..CARING && (battery == null || battery in 0..100) &&
+            (trail == null || trail.size <= MAX_TRAIL) && (start == null || start > 0) && (plan == null || plan.size == 8)
+
+    companion object {
+        const val RAISED = 1
+        const val ENDED = 2
+        const val CARING = 3
+        const val MAX_TRAIL = 10
+
+        /**
+         * ID of the call the sign of life [plan] turns into when the alarm of its [due] (seconds) is due: the first
+         * 8 bytes of SHA-256(`anmp/v1/alive-sos` ‖ plan ‖ due as 8 bytes big-endian).
+         */
+        @JsExport.Ignore
+        suspend fun aliveId(plan: ByteArray, due: Long): ByteArray {
+            require(plan.size == Anmp.ID_BYTES) { "plan ID must have ${Anmp.ID_BYTES} bytes" }
+            val d = ByteArray(8) { (due ushr (8 * (7 - it))).toByte() }
+            return AnmpCrypto.sha256(AnmpInfo.ALIVE_SOS.encodeToByteArray() + plan + d).copyOf(Anmp.ID_BYTES)
+        }
+    }
+}
+
+/**
+ * A place in a conversation (ADR 0121 §8), shown as a card that opens the map. [kind]: [MEET] a meeting point for
+ * everyone in the conversation ([position], optional [label]); [ASK] „Wo bist du?“, without a position; [HERE] the
+ * sender's place as the answer; [ALL] the invitation to share for a time, which says nothing about a place. Field 2 of the content carries a text for apps that do not know the field. A [MEET] or
+ * [HERE] without a plausible position and an unknown kind are ignored, the message stays.
+ */
+@JsExport
+@Serializable
+class AnmpSpot(
+    @CborLabel(0) val kind: Int,
+    @CborLabel(1) val position: AnmpPosition? = null,
+    @CborLabel(2) val label: String? = null,
+    /** [ALL]: until when everyone who joins shares its place, seconds since 1970. */
+    @CborLabel(3) val until: Long? = null,
+) {
+    val plausible: Boolean
+        get() = when (kind) {
+            MEET, HERE -> position?.plausible == true
+            ASK -> true
+            ALL -> until != null && until > 0
+            else -> false
+        } && (label == null || label.length <= MAX_LABEL)
+
+    companion object {
+        const val MEET = 1
+        const val ASK = 2
+        const val HERE = 3
+
+        /** „Alle teilen“ (ADR 0121 §13): the sender invites everyone in the circle to share its place until [until]. */
+        const val ALL = 4
+        const val MAX_LABEL = 60
+    }
+}
+
+/**
+ * What a person shares of its place with the reader (kind position, ADR 0121 §3, §4). [level] is what the reader may
+ * expect ([OFF], [WHEN], [AREA], [EXACT]; every level includes the ones before). [position] is the place right now: with
+ * [radius] (metres) the centre of a fixed area the person is somewhere in, without it the point itself. No [position]:
+ * nothing to show now (level [OFF] or [WHEN], or the sharing ended). [until]: seconds since 1970 until when the level
+ * holds, missing = until changed. [ask]: the sender asks to be shown the reader's place (§4.4); such a packet says
+ * nothing about the sender's own place. [label] and [since]: the name of a place the person saved and since when it is
+ * there; readers show it instead of a place name and do not notify about it.
+ */
+@JsExport
+@Serializable
+class AnmpPlace(
+    @CborLabel(0) val level: Int,
+    @CborLabel(1) val position: AnmpPosition? = null,
+    @CborLabel(2) val radius: Int? = null,
+    @CborLabel(3) val until: Long? = null,
+    @CborLabel(4) val ask: Boolean? = null,
+    /** The name the person gave the place it is at, e.g. „Zu Hause“ (ADR 0121 §13); only with [position]. */
+    @CborLabel(5) val label: String? = null,
+    /** Since when the person is at [label], seconds since 1970. */
+    @CborLabel(6) val since: Long? = null,
+) {
+    /** `false` for an unknown level, a place not on earth, an area without a centre or one wider than [MAX_RADIUS]. */
+    val plausible: Boolean
+        get() = level in OFF..EXACT && (position == null || position.plausible) &&
+            (radius == null || (position != null && radius in 1..MAX_RADIUS)) && (until == null || until > 0) &&
+            (label == null || (position != null && label.length in 1..MAX_LABEL)) && (since == null || (label != null && since > 0))
+
+    companion object {
+        const val OFF = 0
+        const val WHEN = 1
+        const val AREA = 2
+        const val EXACT = 3
+        const val MAX_RADIUS = 50_000
+        const val MAX_LABEL = 40
+    }
+}
+
+/**
+ * A place on earth (ADR 0121 §10, ADR 0083 §6). [lat], [lon]: degrees × 10 000, north and east positive (about 10 m);
+ * [at]: when the device located it, seconds since 1970 by its clock; [acc]: accuracy in metres, if known.
+ */
+@JsExport
+@Serializable
+class AnmpPosition(
+    @CborLabel(0) val lat: Int,
+    @CborLabel(1) val lon: Int,
+    @CborLabel(2) val at: Long,
+    @CborLabel(3) val acc: Int? = null,
+) {
+    /** In range: on earth, located at some time, accuracy at most [MAX_ACC] metres. */
+    val plausible: Boolean
+        get() = lat in -MAX_LAT..MAX_LAT && lon in -MAX_LON..MAX_LON && at > 0 && (acc == null || acc in 0..MAX_ACC)
+
+    companion object {
+        /** Degrees × [SCALE] on the wire. */
+        const val SCALE = 10_000
+
+        const val MAX_LAT = 90 * SCALE
+
+        const val MAX_LON = 180 * SCALE
+
+        /** Anything less accurate than 100 km says nothing. */
+        const val MAX_ACC = 100_000
+    }
+}
 
 /** Values of [AnmpAlive.state]. Unknown values are read like [OK]. */
 @JsExport
@@ -459,7 +636,34 @@ class AnmpImage(
     @CborLabel(3) val hash: ByteArray? = null,
 )
 
-/** Circle name and picture, each with time (ms) and device of the last change (ADR 0012). */
+/**
+ * A place of a circle (ADR 0121 §21): [id] (8 bytes), [name], the point in degrees × [AnmpPosition.SCALE] and the
+ * [radius] around it in metres. Every member knows it and may change it.
+ */
+@JsExport
+@Serializable
+class AnmpCirclePlace(
+    @CborLabel(0) val id: ByteArray,
+    @CborLabel(1) val name: String,
+    @CborLabel(2) val lat: Int,
+    @CborLabel(3) val lon: Int,
+    @CborLabel(4) val radius: Int,
+) {
+    val plausible: Boolean
+        get() = id.size == ID_BYTES && name.length in 1..AnmpPlace.MAX_LABEL && lat in -90 * AnmpPosition.SCALE..90 * AnmpPosition.SCALE &&
+            lon in -180 * AnmpPosition.SCALE..180 * AnmpPosition.SCALE && radius in 1..MAX_RADIUS
+
+    companion object {
+        const val ID_BYTES = 8
+        const val MAX_RADIUS = 5_000
+        const val MAX_PLACES = 20
+    }
+}
+
+/**
+ * Circle name and picture, each with time (ms) and device of the last change (ADR 0012); and the places of the
+ * circle as one list with its time and device ([placesTs] missing: this packet says nothing about them).
+ */
 @JsExport
 @Serializable
 class AnmpMeta(
@@ -469,6 +673,9 @@ class AnmpMeta(
     @CborLabel(3) val image: AnmpImage? = null,
     @CborLabel(4) val imageTs: Long,
     @CborLabel(5) val imageBy: ByteArray,
+    @CborLabel(6) val places: List<AnmpCirclePlace>? = null,
+    @CborLabel(7) val placesTs: Long? = null,
+    @CborLabel(8) val placesBy: ByteArray? = null,
 )
 
 /** History index for a new member (ADR 0014). Times in ms. */

@@ -145,6 +145,12 @@ object AnmpInfo {
     /** X25519 shared secret → key of an alert sealed to the read key; followed by both public keys (ADR 0062). */
     const val ALERT_SEAL = "anmp/v1/alert-seal"
 
+    /**
+     * Prefix of the ID of the call a sign of life turns into when its alarm is due (ADR 0083 §5.4), followed by the
+     * plan ID and `due` in seconds as 8 bytes big-endian; SHA-256, first 8 bytes.
+     */
+    const val ALIVE_SOS = "anmp/v1/alive-sos"
+
     /** Prefix of the hashed incident key of an alert (ADR 0062 §4), followed by the key in UTF-8; SHA-256, first 8 bytes. */
     const val ALERT_KEY = "anmp/v1/alert-key"
 

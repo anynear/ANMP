@@ -28,6 +28,12 @@ import app.anynear.anmp.AnmpIntro
 import app.anynear.anmp.AnmpIntroCard
 import app.anynear.anmp.AnmpIntroReply
 import app.anynear.anmp.AnmpIntros
+import app.anynear.anmp.AnmpPlace
+import app.anynear.anmp.AnmpCirclePlace
+import app.anynear.anmp.AnmpPosition
+import kotlin.math.roundToInt
+import app.anynear.anmp.AnmpSos
+import app.anynear.anmp.AnmpSpot
 import app.anynear.anmp.AnmpAead
 import app.anynear.anmp.AnmpMailbox
 import app.anynear.anmp.AnmpAlertBody
@@ -266,6 +272,8 @@ class AnmpCore(
     private val radioSoftware = RadioInbox.parse(config.radioSoftwareSpace, config.radioSoftwareGrant)?.let { (space, grant) ->
         PublishedSpace(space, grant, net, pool)
     }
+    private val maps = RadioInbox.parse(config.mapSpace, config.mapGrant)?.let { (space, grant) -> PublishedSpace(space, grant, net, pool) }
+    private val mapData = RadioInbox.parse(config.mapDataSpace, config.mapDataGrant)?.let { (space, grant) -> PublishedSpace(space, grant, net, pool) }
     private val radioInbox = RadioInbox.parse(config.radioInboxSpace, config.radioInboxGrant)?.let { (space, grant) ->
         RadioInbox(space, grant, platform, net, pool)
     }
@@ -1338,6 +1346,12 @@ class AnmpCore(
             val a = channelAccess(c) ?: continue
             out += Listed.Channel(c.id, B64.decode(c.readKey), a)
         }
+        // Signs of life others started for this person alone: the space where their phone leaves the alarm (ADR 0121 §23).
+        for (p in s.alive) {
+            if (p.peer == null || p.watch == null || p.owner == ownPersonId || p.ended || AliveLogic.stale(p, now)) continue
+            val k = runCatching { CircleKeys.of(p.watch) }.getOrNull() ?: continue
+            out += Listed.Watch(p.id, k, circleAccess(k))
+        }
         return out
     }
 
@@ -1698,7 +1712,7 @@ class AnmpCore(
             return
         }
         val packet = openEnvelope(l, data) ?: return
-        val opened = Packets.open(me, packet, l.scope, (l as? Listed.Circle)?.keys, ::peerByTag) ?: return
+        val opened = Packets.open(me, packet, l.scope, (l as? Listed.Circle)?.keys ?: (l as? Listed.Watch)?.keys, ::peerByTag) ?: return
         if (l is Listed.Inbox) sawViaInternet(opened)
         runCatching { dispatch(l, id, opened, meta.grant?.hash?.toString()) }.onFailure { e ->
             if (e is CancellationException) throw e
@@ -1731,6 +1745,10 @@ class AnmpCore(
             }
             is Listed.Circle -> onCircle(l, objectId, o, person)
             is Listed.Channel -> Unit
+            // Only the alarm of that plan is taken there, and only from its owner.
+            is Listed.Watch -> o.content.alive?.takeIf { o.kind == AnmpKind.ALIVE && it.guard && B64.encode(it.plan) == l.planId }?.let {
+                onAlive("", o.fromDevice, person, o.content.id, o.content.ts, it, receipt = false, call = o.content.sos, viaWatch = true)
+            }
         }
     }
 
@@ -1807,8 +1825,9 @@ class AnmpCore(
             AnmpKind.REACT -> reactionEvent(conversation, o)?.let { emit(it) }
             AnmpKind.DELETE -> deleteEvent(conversation, o.fromDevice, c)?.let { emit(it) }
             AnmpKind.META -> c.meta?.let { onMeta(circle, it) }
-            AnmpKind.ALIVE -> c.alive?.let { onAlive(circle, o.fromDevice, person, c.id, c.ts, it) }
-            AnmpKind.CARE -> c.care?.let { onCare(circle, person, c.ts, it) }
+            AnmpKind.ALIVE -> c.alive?.let { onAlive(circle.id, o.fromDevice, person, c.id, c.ts, it, call = c.sos) }
+            AnmpKind.CARE -> c.care?.let { onCare(circle.id, person, c.ts, it) }
+            AnmpKind.SOS -> c.sos?.let { onSos(person, circle.id, c.ts, it, o.fromDevice, c.id) }
             AnmpKind.WANT -> c.wantHash?.takeIf { it.size == 16 }?.let { onWant(conversation, o.fromDevice, B64.encode(it)) }
             AnmpKind.HAVE -> haveEvent(c)?.let { emit(it) }
             AnmpKind.REKEY -> c.rekey?.takeIf { o.toUs && it.key.size == 32 }?.let { r ->
@@ -1870,18 +1889,28 @@ class AnmpCore(
         val conversation = Conversation.Direct(person)
         when (o.kind) {
             AnmpKind.DIRECT -> messageEvent(conversation, objectId, l.access.name, o, person = person, intro = introOf(o, person))?.let {
+                // A place that rode along (ADR 0121 §20): like a kind position, and only while it is news.
+                if (known && nowS() - c.ts < PLACE_LIFETIME.inWholeSeconds) c.place?.let { p -> onPlace(person, c.ts, p) }
                 emitReceived(it, l.access.space, objectId)
                 it.mid?.let { mid -> confirmReceipt(o.fromDevice, mid, AnmpArrived.INTERNET) }
             }
             AnmpKind.RECEIPT, AnmpKind.READ -> if (known) {
                 c.ids?.filter { it.size == Anmp.ID_BYTES }?.map(B64::encode)?.takeIf { it.isNotEmpty() }
                     ?.let {
-                        if (o.kind == AnmpKind.RECEIPT) onAliveReceipt(person, it)
+                        if (o.kind == AnmpKind.RECEIPT) {
+                            onAliveReceipt(person, it)
+                            onSosReceipt(person, it)
+                        }
                         emit(CoreEvent.Receipt(o.fromDevice, it, read = o.kind == AnmpKind.READ, arrived = c.arrived ?: 0))
                     }
             }
             AnmpKind.REACT -> if (known) reactionEvent(conversation, o)?.let { emit(it) }
             AnmpKind.DELETE -> if (known) emitDeleted(deleteEvent(conversation, o.fromDevice, c))
+            AnmpKind.POSITION -> if (known) c.place?.let { onPlace(person, c.ts, it) }
+            // A sign of life for us alone and the answer to an own one (ADR 0083 §1, ADR 0121 §23).
+            AnmpKind.ALIVE -> if (known && person != ownPersonId) c.alive?.let { onAlive("", o.fromDevice, person, c.id, c.ts, it) }
+            AnmpKind.CARE -> if (known) c.care?.let { onCare("", person, c.ts, it) }
+            AnmpKind.SOS -> if (known) c.sos?.let { onSos(person, null, c.ts, it, o.fromDevice, c.id) }
             AnmpKind.PROFILE -> {
                 val image = c.image?.let(::imageRef)
                 val ts = c.imageTs ?: 0
@@ -1930,7 +1959,7 @@ class AnmpCore(
             circleImageHash = c.circleImageHash?.takeIf { it.size == 16 }?.let(B64::encode),
             opened = if (conversation is Conversation.Circle) o.message.opened else null,
             forwarded = o.forwarded, history = history, fromPerson = person, link = link,
-            replyTo = replyOf(c)?.first, replyFrom = replyOf(c)?.second, passedOn = c.passedOn == true, intro = intro, fromRequest = fromRequest,
+            replyTo = replyOf(c)?.first, replyFrom = replyOf(c)?.second, passedOn = c.passedOn == true, intro = intro, fromRequest = fromRequest, spot = MessageSpot.of(c.spot),
         )
     }
 
@@ -2073,6 +2102,9 @@ class AnmpCore(
         ask: Boolean? = null,
         intro: AnmpIntro? = null,
         introReply: AnmpIntroReply? = null,
+        place: AnmpPlace? = null,
+        spot: AnmpSpot? = null,
+        sos: AnmpSos? = null,
     ): AnmpContent {
         val p = state.profile
         return AnmpContent(
@@ -2084,6 +2116,7 @@ class AnmpCore(
             inbox = if (inbox || grant != null) me.inbox.bytes else null, grant = grant?.encode(),
             person = own?.proof?.takeIf { withChain }, peer = peer?.let(B64::decode), personRef = own?.ref, circle = circle, sync = sync, keys = keys, ownData = ownData,
             arrived = arrived, channel = channel, link = link, alive = alive, care = care, passedOn = true.takeIf { passedOn }, ask = ask, intro = intro, introReply = introReply,
+            place = place, spot = spot, sos = sos,
         )
     }
 
@@ -2461,8 +2494,35 @@ class AnmpCore(
         val image = c.image
         val upload = image?.hash?.let { h -> state.uploads.firstOrNull { it.space == keys.space.toString() && it.hash == h } }
             ?.let { u -> platform.blobs.read("core/img/${u.space}/${u.hash}")?.let { ID.parse(u.ref.id) to it } }
-        val meta = AnmpMeta(c.name, c.nameTs, deviceBytes(c.nameBy), image?.let(::anmpImage), c.imageTs, deviceBytes(c.imageBy))
+        val meta = AnmpMeta(
+            c.name, c.nameTs, deviceBytes(c.nameBy), image?.let(::anmpImage), c.imageTs, deviceBytes(c.imageBy),
+            places = c.places.takeIf { c.placesTs > 0 }?.map { p ->
+                AnmpCirclePlace(B64.decode(p.id), p.name, (p.latitude * AnmpPosition.SCALE).roundToInt(), (p.longitude * AnmpPosition.SCALE).roundToInt(), p.radius)
+            },
+            placesTs = c.placesTs.takeIf { it > 0 }, placesBy = deviceBytes(c.placesBy).takeIf { c.placesTs > 0 },
+        )
         postCircle(circleId, AnmpKind.META, content(meta = meta), keys = keys, contents = listOfNotNull(upload))
+    }
+
+    /** The places of the circle [circleId] (ADR 0121 §21). */
+    fun circlePlaces(circleId: String): List<CirclePlace> = circle(circleId)?.places.orEmpty()
+
+    /**
+     * Sets the places of a circle; every member may. The whole list is one value: the newest one counts. `false` for
+     * an unknown circle, a place out of range or more than [AnmpCirclePlace.MAX_PLACES].
+     */
+    suspend fun setCirclePlaces(circleId: String, places: List<CirclePlace>): Boolean = onCore {
+        circle(circleId)?.takeIf { !it.removed } ?: return@onCore false
+        val clean = places.map { it.copy(name = it.name.trim().take(AnmpPlace.MAX_LABEL)) }
+        val ok = clean.size <= AnmpCirclePlace.MAX_PLACES && clean.map { it.id }.distinct().size == clean.size && clean.all { p ->
+            runCatching { B64.decode(p.id) }.getOrNull()?.size == AnmpCirclePlace.ID_BYTES && p.name.isNotEmpty() && p.latitude.isFinite() && p.longitude.isFinite() &&
+                p.latitude in -90.0..90.0 && p.longitude in -180.0..180.0 && p.radius in 1..AnmpCirclePlace.MAX_RADIUS
+        }
+        if (!ok) return@onCore false
+        updateCircle(circleId) { it.copy(places = clean, placesTs = now(), placesBy = me.deviceId) }
+        emit(CoreEvent.CirclePlacesChanged(circleId))
+        publishMeta(circleId)
+        return@onCore true
     }
 
     private fun deviceBytes(id: String): ByteArray = runCatching { B64.decode(id) }.getOrNull()?.takeIf { it.size == 16 } ?: ByteArray(0)
@@ -2474,6 +2534,7 @@ class AnmpCore(
         val nameBy = B64.encode(meta.nameBy)
         val imageBy = B64.encode(meta.imageBy)
         val image = meta.image?.let(::imageRef)
+        onCirclePlaces(circle, meta)
         val nameChanged = CircleState.isNewer(meta.nameTs, nameBy, circle.nameTs, circle.nameBy)
         val imageChanged = CircleState.isNewer(meta.imageTs, imageBy, circle.imageTs, circle.imageBy)
         if (!nameChanged && !imageChanged) return
@@ -2485,6 +2546,17 @@ class AnmpCore(
         }
         if (nameChanged && name != circle.name && meta.nameTs > circle.joinedAt) emit(CoreEvent.CircleRenamed(circle.id, nameBy, name))
         if (imageChanged && image != circle.image && meta.imageTs > circle.joinedAt) emit(CoreEvent.CircleImageChanged(circle.id, imageBy, image == null))
+    }
+
+    private suspend fun onCirclePlaces(circle: CircleState, meta: AnmpMeta) {
+        val ts = meta.placesTs ?: return
+        val by = meta.placesBy?.let(B64::encode) ?: return
+        val list = meta.places.orEmpty()
+        if (list.size > AnmpCirclePlace.MAX_PLACES || list.any { !it.plausible }) return
+        if (!CircleState.isNewer(ts, by, circle.placesTs, circle.placesBy)) return
+        val places = list.map { CirclePlace(B64.encode(it.id), it.name, it.lat.toDouble() / AnmpPosition.SCALE, it.lon.toDouble() / AnmpPosition.SCALE, it.radius) }
+        updateCircle(circle.id) { it.copy(places = places, placesTs = ts, placesBy = by) }
+        emit(CoreEvent.CirclePlacesChanged(circle.id))
     }
 
     private suspend fun updateCircle(circleId: String, change: (CircleState) -> CircleState) {
@@ -3055,6 +3127,8 @@ class AnmpCore(
         replyFrom: String? = null,
         /** The message passes on one the sender got („Weiterleiten“, content field 38, ADR 0118). */
         passedOn: Boolean = false,
+        /** A meeting point, „Wo bist du?“ or the answer to it (ADR 0121 §8); the text is what older apps show. */
+        spot: MessageSpot? = null,
     ): Outgoing?  = onCore {
         opened.await()
         val (_, keys) = currentCircle(circleId) ?: return@onCore null
@@ -3068,7 +3142,7 @@ class AnmpCore(
                 id = mid, text = text, attachments = attachments.map { it.attachment },
                 imageHash = p.imageHash?.let(B64::decode), imageTs = p.imageTs.takeIf { p.imageHash != null }, circleImageHash = circleImageHash?.let(B64::decode),
                 ts = timestampMillis?.let { it / 1000 } ?: nowS(), link = link?.let(::wireLink),
-                ref = reply?.first, refFrom = reply?.second, passedOn = passedOn,
+                ref = reply?.first, refFrom = reply?.second, passedOn = passedOn, spot = spot?.toWire(),
             ),
             keys = keys, contents = attachmentContents(attachments + listOfNotNull(link?.image)), ref = midText, notify = true,
         ) ?: return@onCore null
@@ -3093,9 +3167,16 @@ class AnmpCore(
         replyFrom: String? = null,
         /** As in [sendCircle] (ADR 0118). */
         passedOn: Boolean = false,
+        /** As in [sendCircle] (ADR 0121 §8). */
+        spot: MessageSpot? = null,
+        /**
+         * What the reader sees of the sender's place right now (ADR 0121 §20): rides along instead of a packet of its
+         * own. The reader takes it like a kind position; it is no part of the message and not kept with it.
+         */
+        place: PlaceShare? = null,
     ): Outgoing?  = onCore {
         opened.await()
-        directTo(id, text, attachments, mid, timestampMillis, link, replyTo, replyFrom, passedOn = passedOn)
+        directTo(id, text, attachments, mid, timestampMillis, link, replyTo, replyFrom, passedOn = passedOn, spot = spot?.toWire(), place = place?.toWire())
     }
 
     /** Body of [sendDirect]; [intro] and [introReply] for introductions (ADR 0116), not shown as text by older apps. */
@@ -3112,6 +3193,8 @@ class AnmpCore(
         introReply: AnmpIntroReply? = null,
         own: Boolean = true,
         passedOn: Boolean = false,
+        spot: AnmpSpot? = null,
+        place: AnmpPlace? = null,
     ): Outgoing? {
         val reply = replyBytes(replyTo, replyFrom)
         val person = personOf(id)
@@ -3137,12 +3220,15 @@ class AnmpCore(
             val c = content(
                 id = mid, text = text, attachments = attachments.map { it.attachment }, imageHash = p.imageHash?.let(B64::decode),
                 imageTs = p.imageTs.takeIf { p.imageHash != null }, inbox = true, grant = grant, ts = ts, withChain = true, link = wire,
-                ref = reply?.first, refFrom = reply?.second, intro = intro, introReply = introReply, passedOn = passedOn,
+                ref = reply?.first, refFrom = reply?.second, intro = intro, introReply = introReply, passedOn = passedOn, spot = spot,
+                // Only towards the reader; the copy for own other devices carries no place.
+                place = place,
             )
             if (postTo(t, AnmpKind.DIRECT, c, if (any) emptyList() else contents, ref = midText, notify = t === mailbox || t in waking)) any = true
         }
         if (!any) return null
-        if (own) postOwn(AnmpKind.DIRECT, content(id = mid, text = text, attachments = attachments.map { it.attachment }, ts = ts, peer = person, link = wire, ref = reply?.first, refFrom = reply?.second, intro = intro, passedOn = passedOn))
+        if (place != null) update { s -> s.copy(placesSent = s.placesSent + (person to "${place.level}/${place.until ?: 0}")) }
+        if (own) postOwn(AnmpKind.DIRECT, content(id = mid, text = text, attachments = attachments.map { it.attachment }, ts = ts, peer = person, link = wire, ref = reply?.first, refFrom = reply?.second, intro = intro, passedOn = passedOn, spot = spot))
         dropPrepared(withImage)
         return Outgoing(midText, null)
     }
@@ -3328,7 +3414,9 @@ class AnmpCore(
     fun aliveNextAt(now: Long = now()): Long? = aliveStatuses(now).map { it.nextAt }.filter { it > 0 }.minOrNull()
 
     /**
-     * Starts a sign of life in the circle [circleId] the person chose; its other members watch it (ADR 0083 §1). An own
+     * Starts a sign of life in the circle [circleId] the person chose; its other members watch it (ADR 0083 §1). With
+     * [person] it goes to that one person instead, like a direct message, over the internet and over radio. The alarm
+     * for the relays is then left in a space of the plan's own that both derive from a secret in the packets. An own
      * one still running ends first. [until]: latest end (ms); [quiet]: how long the phone may lie still before it asks,
      * at least [AliveLogic.MIN_QUIET]; [firstDue]: first time to ask, if not after [quiet] (e.g. „einmal am Morgen“).
      * `null` if the circle is unknown or we were removed from it.
@@ -3342,16 +3430,20 @@ class AnmpCore(
         firstDue: Long? = null,
         hint: Long = AliveLogic.DEFAULT_HINT,
         alarm: Long = AliveLogic.DEFAULT_ALARM,
+        person: String? = null,
     ): AlivePlan? = onCore {
         opened.await()
-        val circle = circle(circleId)?.takeIf { !it.removed } ?: return@onCore null
+        // For one person instead of a circle ([person], then [circleId] does not count): it alone watches it.
+        val peer = person?.let { personOf(it) }
+        if (peer != null && (peer == ownPersonId || recipientsOf(peer).isEmpty())) return@onCore null
+        val circle = if (peer != null) null else circle(circleId)?.takeIf { !it.removed } ?: return@onCore null
         state.alive.filter { it.owner == ownPersonId && !it.ended }.forEach { sendAlive(it, AnmpAliveState.END) }
         val start = now()
         val end = until.coerceIn(start + 60_000L, start + AliveLogic.MAX_LENGTH)
         val q = quiet.coerceIn(AliveLogic.MIN_QUIET, AliveLogic.MAX_QUIET)
         val h = hint.coerceIn(60_000L, 3_600_000L)
         val plan = AlivePlan(
-            id = B64.encode(messageIdOf(null)), circleId = circle.id, owner = ownPersonId, label = label.trim().take(AliveLogic.MAX_LABEL),
+            id = B64.encode(messageIdOf(null)), circleId = circle?.id.orEmpty(), peer = peer, watch = peer?.let { B64.encode(AnmpKeys.randomKey()) }, owner = ownPersonId, label = label.trim().take(AliveLogic.MAX_LABEL),
             start = start, until = end, due = (firstDue ?: AliveLogic.nextDue(start, q, end)).coerceIn(start, end), hint = h,
             alarm = alarm.coerceIn(h, 86_400_000L), quiet = q, motion = motion, state = AnmpAliveState.START, lastAt = start,
             confirmedAt = start,
@@ -3376,6 +3468,286 @@ class AnmpCore(
         return@onCore sendAlive(plan, AnmpAliveState.END) != null
     }
 
+    /**
+     * Hands in where this phone is, for the own running plan [planId] (ADR 0121 §10). The place stays here and goes
+     * to the helpers only when the phone reports „nicht bestätigt“. `null` forgets it, e.g. when the person no longer
+     * allows it. `false` if the plan is not an own running one or the place is out of range.
+     */
+    suspend fun aliveSetPosition(planId: String, position: AlivePosition?, trail: List<AlivePosition> = emptyList()): Boolean = onCore {
+        val plan = ownPlan(planId) ?: return@onCore false
+        if (position != null && !position.valid) return@onCore false
+        // Where the phone was before goes only with a place, into the call the helpers get if nobody confirms.
+        val before = if (position == null) emptyList() else trail.filter { it.valid && it.at < position.at }.takeLast(AnmpSos.MAX_TRAIL)
+        if (plan.position != position || plan.trail != before) putPlan(plan.copy(position = position, trail = before))
+        return@onCore true
+    }
+
+    // --- Calling the helpers (kind sos, ADR 0083 §2–§4) ------------------------------------------
+
+    /** The own call and those of persons we help; ended ones stay for a day. */
+    fun sosCalls(): List<SosCall> = state.sos
+
+    /**
+     * Calls the helpers (ADR 0083 §3): into every circle of [circleIds] (there also over radio) and to every person
+     * of [personIds] that is in none of them, with a wake-up. [position], [battery] (percent) and [trail] (where the
+     * phone was before, oldest first) go along. The ID of the call, `null` if it reached nobody. A running own call
+     * is updated instead of starting a second one.
+     */
+    suspend fun raiseSos(circleIds: List<String>, personIds: List<String>, position: AlivePosition? = null, battery: Int? = null, trail: List<AlivePosition> = emptyList()): String? = onCore {
+        opened.await()
+        // A call that came from a sign of life went to that circle only; one raised by hand goes to all helpers.
+        state.sos.firstOrNull { it.own && !it.ended && it.plan == null }?.let { running ->
+            return@onCore if (sendSos(running.copy(position = position ?: running.position, battery = battery ?: running.battery, trail = trail.ifEmpty { running.trail }), AnmpSos.RAISED)) running.id else null
+        }
+        val now = now()
+        val circles = circleIds.distinct().filter { currentCircle(it) != null }
+        val covered = circles.flatMap { c -> state.members.filter { it.circleId == c }.map { personOf(it.deviceId) } }.toSet()
+        val persons = personIds.map { personOf(it) }.distinct().filter { it != ownPersonId && it !in covered }
+        val call = SosCall(B64.encode(Anmp.newMessageId()), ownPersonId, own = true, start = now, lastAt = now, position = position, battery = battery, trail = trail, circles = circles, persons = persons)
+        return@onCore if (sendSos(call, AnmpSos.RAISED)) call.id else null
+    }
+
+    /** New place, battery and trail for the own running call [id]; `false` if it is not running. */
+    suspend fun updateSos(id: String, position: AlivePosition?, battery: Int? = null, trail: List<AlivePosition> = emptyList()): Boolean = onCore {
+        val call = state.sos.firstOrNull { it.id == id && it.own && !it.ended } ?: return@onCore false
+        sendSos(call.copy(position = position ?: call.position, battery = battery ?: call.battery, trail = trail.ifEmpty { call.trail }), AnmpSos.RAISED, wake = false)
+    }
+
+    /** „Alles gut“: ends the own call [id]; the helpers get the all-clear. */
+    suspend fun endSos(id: String): Boolean = onCore {
+        val call = state.sos.firstOrNull { it.id == id && it.own && !it.ended } ?: return@onCore false
+        // For a call that came from a sign of life „Alles gut“ is its confirmation, which ends the call (ADR 0083 §5.4).
+        call.plan?.let { ownPlan(it) }?.let { plan -> return@onCore sendAlive(plan, AnmpAliveState.OK) != null }
+        sendSos(call.copy(ended = true), AnmpSos.ENDED)
+    }
+
+    /** „Ich kümmere mich“ as a helper of the call [id]: goes back the way the call came, so every helper there sees it. */
+    suspend fun careSos(id: String): Boolean = onCore {
+        val call = state.sos.firstOrNull { it.id == id && !it.own && !it.ended } ?: return@onCore false
+        val ts = now()
+        val mid = Anmp.newMessageId()
+        val wire = AnmpSos(B64.decode(id), AnmpSos.CARING)
+        val c = content(id = mid, sos = wire, ts = ts / 1000)
+        val sent = if (call.via != null) {
+            (postCircle(call.via, AnmpKind.SOS, c, notify = true) != null).also { ok ->
+                if (ok) radio?.let { way -> cs.launch { runCatching { way.sos(call.via, mid, ts / 1000, wire) } } }
+            }
+        } else {
+            postPerson(call.owner, AnmpKind.SOS, c, notify = true).also { ok ->
+                if (ok) radio?.let { way -> cs.launch { runCatching { way.sosTo(devicesOfPerson(call.owner).ifEmpty { setOf(call.owner) }, mid, ts / 1000, wire) } } }
+            }
+        }
+        if (sent) putSos(call.copy(caring = (call.caring + ownPersonId).distinct()))
+        // Helpers and the person on a version that only knows signs of life see it as „Ich schaue nach“.
+        if (sent) call.plan?.let { p -> state.alive.firstOrNull { it.id == p && it.owner != ownPersonId && !it.ended } }?.let { sendCare(it, AnmpCareState.LOOKING) }
+        return@onCore sent
+    }
+
+    /** [keep]: keep the call also if no packet got out, so that the next update sends it. */
+    private suspend fun sendSos(call: SosCall, st: Int, wake: Boolean = true, keep: Boolean = false): Boolean {
+        val now = now()
+        val mid = Anmp.newMessageId()
+        val wire = call.toWire(st)
+        val c = content(id = mid, sos = wire, ts = now / 1000)
+        var any = false
+        for (circleId in call.circles) {
+            if (postCircle(circleId, AnmpKind.SOS, c, notify = wake) != null) any = true
+            // Also over radio with the same message ID, so helpers without internet are called (ADR 0083 §7).
+            radio?.let { way -> cs.launch { runCatching { way.sos(circleId, mid, now / 1000, wire) } } }
+        }
+        for (person in call.persons) {
+            if (postPerson(person, AnmpKind.SOS, c, notify = wake)) any = true
+            // To a single person over radio as well, one packet per device (ADR 0121 §23).
+            radio?.let { way -> cs.launch { runCatching { way.sosTo(devicesOfPerson(person).ifEmpty { setOf(person) }, mid, now / 1000, wire) } } }
+        }
+        if (any) putSos(call.copy(lastAt = now, sentMids = (call.sentMids + B64.encode(mid)).takeLast(SOS_MIDS)))
+        else if (keep) putSos(call.copy(lastAt = now))
+        return any
+    }
+
+    // --- A call from a sign of life (ADR 0083 §5.4, ADR 0121 §22) ---------------------------------
+
+    /** ID of the call the plan [planId] turns into when the alarm of [dueMillis] is due ([AnmpSos.aliveId]). */
+    suspend fun aliveCallId(planId: String, dueMillis: Long): String = B64.encode(AnmpSos.aliveId(B64.decode(planId), dueMillis / 1000))
+
+    /**
+     * The own phone still runs, asked in vain and the helpers' alarm is due: it calls the helpers of the plan's circle
+     * itself, with the place and trail the app handed in for the plan. Not while a call raised by hand runs. The call is
+     * kept also if no packet got out; the app's updates send it then.
+     */
+    private suspend fun raiseAliveCall(plan: AlivePlan, now: Long) {
+        val id = aliveCallId(plan.id, plan.due)
+        if (state.sos.any { it.id == id || (it.own && !it.ended) }) return
+        val call = SosCall(
+            id, ownPersonId, own = true, start = now, lastAt = now, position = plan.position, battery = plan.battery, trail = plan.trail,
+            circles = listOfNotNull(plan.circleId.takeIf { plan.peer == null }), persons = listOfNotNull(plan.peer), plan = plan.id, reason = AliveStatus.REASON_MISSED,
+        )
+        sendSos(call, AnmpSos.RAISED, keep = true)
+    }
+
+    /**
+     * As a helper: the alarm of [plan] is due, by the own deadline or because the relays released the alarm the phone
+     * left with them. That alarm is a call with an ID everyone computes alike, so the packet of the phone, the one the
+     * relays kept ([wire]) and this deadline give one call and one alarm. Not while another call of the person runs.
+     */
+    private suspend fun openAliveCall(plan: AlivePlan, wire: AnmpSos? = null) {
+        if (plan.owner == ownPersonId) return
+        val id = aliveCallId(plan.id, plan.due)
+        val reason = if (plan.state == AnmpAliveState.MISSED) AliveStatus.REASON_MISSED else AliveStatus.REASON_UNREACHABLE
+        val w = wire?.takeIf { it.plausible && it.state == AnmpSos.RAISED && B64.encode(it.id) == id }
+        val place = AlivePosition.of(w?.position) ?: plan.position
+        val trail = w?.trail?.mapNotNull { AlivePosition.of(it) }.orEmpty()
+        // Who said „Ich schaue nach“ since the last sign of life, e.g. after the quiet hint, already looks after it.
+        val looking = AliveLogic.status(plan, false, ownPersonId, now()).looking.filter { it != plan.owner }
+        val known = state.sos.firstOrNull { it.id == id }
+        if (known != null) {
+            if (known.owner != plan.owner) return
+            val next = known.copy(
+                caring = (known.caring + looking).distinct(),
+                plan = plan.id, reason = known.reason.takeIf { it != 0 } ?: reason, via = known.via ?: plan.circleId.takeIf { plan.peer == null },
+                position = known.position ?: place, battery = known.battery ?: w?.battery ?: plan.battery, trail = known.trail.ifEmpty { trail },
+            )
+            if (next != known) putSos(next)
+            return
+        }
+        if (state.sos.any { it.owner == plan.owner && !it.ended }) return
+        putSos(
+            SosCall(
+                id, plan.owner, own = false, start = w?.start?.let { it * 1000 } ?: (plan.due + plan.alarm), lastAt = plan.lastAt,
+                position = place, battery = w?.battery ?: plan.battery, trail = trail, caring = looking, via = plan.circleId.takeIf { plan.peer == null }, plan = plan.id, reason = reason,
+            ),
+        )
+    }
+
+    /**
+     * Whether a raised call of [person] counts that comes from the sign of life [planId] (field 6; `null`: raised by
+     * hand, always): not if the person confirmed since [at] or ended on purpose, not for a helper who said it cannot
+     * look, and no second call next to a running one of the person.
+     */
+    private fun aliveCallCounts(person: String, planId: String?, at: Long, known: SosCall?): Boolean {
+        if (planId == null) return true
+        state.alive.firstOrNull { it.id == planId }?.let { plan ->
+            if (plan.owner != person || plan.state == AnmpAliveState.END) return false
+            if (plan.state in AnmpAliveState.START..AnmpAliveState.MOVING && plan.lastAt > at) return false
+            if (plan.care.any { it.person == ownPersonId && it.state == AnmpCareState.AWAY }) return false
+        }
+        return known != null || state.sos.none { it.owner == person && !it.ended }
+    }
+
+    /** The person of [planId] confirmed or ended on purpose at [at]: the calls that came from the plan are over. */
+    private suspend fun endAliveCalls(planId: String, at: Long) {
+        state.sos.filter { it.plan == planId && !it.own && !it.ended }.forEach { putSos(it.copy(ended = true, lastAt = maxOf(it.lastAt, at))) }
+    }
+
+    private suspend fun putSos(call: SosCall) {
+        val keepFrom = now() - SOS_KEPT_MILLIS
+        update { s -> s.copy(sos = s.sos.filter { it.id != call.id && (!it.ended || it.lastAt > keepFrom) } + call) }
+        emit(CoreEvent.SosChanged(call.id, call.owner))
+    }
+
+    /** A helper's device confirmed a packet of the own call (ADR 0083 §3.4): „Angekommen bei 2 von 3“. */
+    private suspend fun onSosReceipt(person: String, mids: List<String>) {
+        val call = state.sos.firstOrNull { c -> c.own && c.sentMids.any { it in mids } } ?: return
+        if (person != ownPersonId && person !in call.arrived) putSos(call.copy(arrived = call.arrived + person))
+    }
+
+    private suspend fun onSos(person: String, circleId: String?, ts: Long, w: AnmpSos, fromDevice: String? = null, mid: ByteArray? = null) {
+        if (!w.plausible) return
+        val id = B64.encode(w.id)
+        val at = ts * 1000
+        val known = state.sos.firstOrNull { it.id == id }
+        if (w.state == AnmpSos.CARING) {
+            // An answer counts only for a call we know; whoever sees the call may answer.
+            if (known != null && person !in known.caring && person != known.owner) putSos(known.copy(caring = known.caring + person))
+            return
+        }
+        if (person == ownPersonId) return
+        // A call belongs to the person whose packet we saw first; packets of others with its ID are dropped.
+        if (known != null && (known.owner != person || known.lastAt > at)) return
+        val planId = w.plan?.let { B64.encode(it) } ?: known?.plan
+        if (w.state == AnmpSos.RAISED && !aliveCallCounts(person, planId, at, known)) return
+        // An all-clear for a call we never saw is nothing to show.
+        if (known == null && w.state == AnmpSos.ENDED) return
+        putSos(
+            SosCall(
+                id, person, own = false, start = (w.start ?: ts) * 1000, lastAt = at, ended = w.state == AnmpSos.ENDED,
+                position = AlivePosition.of(w.position) ?: known?.position, battery = w.battery ?: known?.battery,
+                trail = w.trail?.mapNotNull { AlivePosition.of(it) } ?: known?.trail.orEmpty(), caring = known?.caring.orEmpty(), via = circleId ?: known?.via,
+                plan = planId, reason = known?.reason?.takeIf { it != 0 } ?: if (planId != null) AliveStatus.REASON_MISSED else 0,
+            ),
+        )
+        // The caller sees that it arrived (ADR 0083 §3.4).
+        if (fromDevice != null && w.state == AnmpSos.RAISED) mid?.takeIf { it.size == Anmp.ID_BYTES }?.let { confirmReceipt(fromDevice, B64.encode(it), AnmpArrived.INTERNET) }
+    }
+
+    /** What other persons share of their place with us, as last heard (ADR 0121 §3). */
+    fun places(): List<PersonPlace> = state.places
+
+    /**
+     * Tells every device of [person] what it sees of our place (kind position, ADR 0121 §3, §5): the [level]
+     * ([AnmpPlace.OFF] … [AnmpPlace.EXACT]) and, if there is something to show now, [position]: with [radius] (metres)
+     * the centre of an area, without it the point. [untilMillis] > 0 limits the level in time. Goes to the person, never
+     * to a circle, and wakes nobody. `false` if it reached no device or the values are out of range.
+     */
+    suspend fun sharePlace(
+        person: String, level: Int, position: AlivePosition? = null, radius: Int? = null, untilMillis: Long = 0,
+        /** The name of a saved place the person is at, and since when (ms); goes along only with [position]. */
+        label: String? = null, sinceMillis: Long = 0,
+    ): Boolean = onCore {
+        opened.await()
+        if (position != null && !position.valid) return@onCore false
+        val name = label?.trim()?.take(AnmpPlace.MAX_LABEL)?.takeIf { it.isNotEmpty() && position != null }
+        val place = AnmpPlace(
+            level, position?.toWire(), radius.takeIf { position != null }, untilMillis.takeIf { it > 0 }?.let { it / 1000 },
+            label = name, since = sinceMillis.takeIf { it > 0 && name != null }?.let { it / 1000 },
+        )
+        if (!place.plausible) return@onCore false
+        // A place is news for a day at most; the level alone stays as long as other entries (a device that reads later).
+        val to = personOf(person)
+        val known = state.placesSent[to]
+        val sent = postPerson(to, AnmpKind.POSITION, content(place = place), lifetime = PLACE_LIFETIME.takeIf { position != null })
+        // Also over radio (ADR 0121 §13), seldom: at once when the level or its end changed, otherwise only now and then.
+        val changed = known != "$level/${untilMillis / 1000}"
+        radio?.let { way ->
+            val devices = devicesOfPerson(to).ifEmpty { setOf(to) }
+            cs.launch { runCatching { way.place(to, devices, nowS(), place, urgent = changed) } }
+        }
+        if (changed) update { s -> s.copy(placesSent = s.placesSent + (to to "$level/${untilMillis / 1000}")) }
+        sent
+    }
+
+    /** Asks [person] to show where it is (ADR 0121 §4.4); it decides, nothing comes by itself. Wakes its phone. */
+    suspend fun askPlace(person: String): Boolean = onCore {
+        opened.await()
+        val to = personOf(person)
+        val ask = AnmpPlace(AnmpPlace.OFF, ask = true)
+        radio?.let { way -> cs.launch { runCatching { way.place(to, devicesOfPerson(to).ifEmpty { setOf(to) }, nowS(), ask, urgent = true) } } }
+        postPerson(to, AnmpKind.POSITION, content(place = ask), notify = true, lifetime = PLACE_LIFETIME)
+    }
+
+    /** Forgets what [person] shared, e.g. when it is no longer a contact. */
+    suspend fun forgetPlace(person: String): Boolean = onCore {
+        if (state.places.none { it.person == person }) return@onCore false
+        update { s -> s.copy(places = s.places.filter { it.person != person }) }
+        emit(CoreEvent.PlaceChanged(person))
+        return@onCore true
+    }
+
+    private suspend fun onPlace(person: String, ts: Long, p: AnmpPlace) {
+        if (!p.plausible || person == ownPersonId) return
+        val at = ts * 1000
+        if (p.ask == true) {
+            emit(CoreEvent.PlaceAsked(person, at))
+            return
+        }
+        val known = state.places.firstOrNull { it.person == person }
+        if (known != null && known.at > at) return
+        val next = PersonPlace(person, p.level, AlivePosition.of(p.position), p.radius, (p.until ?: 0) * 1000, at, p.label, (p.since ?: 0) * 1000)
+        if (next == known) return
+        update { s -> s.copy(places = s.places.filter { it.person != person } + next) }
+        emit(CoreEvent.PlaceChanged(person))
+    }
+
     /** Tells the helpers once that the battery is nearly empty ([percent]). */
     suspend fun aliveBattery(planId: String, percent: Int): Boolean = onCore {
         val plan = ownPlan(planId)?.takeIf { it.battery == null || it.battery > percent + 5 } ?: return@onCore false
@@ -3390,6 +3762,8 @@ class AnmpCore(
         val now = now()
         state.alive.filter { AliveLogic.stale(it, now) }.takeIf { it.isNotEmpty() }?.let { gone ->
             update { s -> s.copy(alive = s.alive - gone.toSet()) }
+            // A call nobody ever answered goes with its sign of life.
+            gone.forEach { endAliveCalls(it.id, now) }
         }
         // Only the device that sends a plan reports for it, so own other devices do not send twice.
         for (plan in state.alive.filter { it.owner == ownPersonId && !it.ended && it.sentMids.isNotEmpty() }) {
@@ -3398,21 +3772,38 @@ class AnmpCore(
                 plan.state != AnmpAliveState.MISSED && now >= AliveLogic.missedAt(plan) -> sendAlive(plan, AnmpAliveState.MISSED)
             }
         }
+        // The helpers' alarm is due and still nobody confirmed: it is a call for them (ADR 0083 §5.4). The own phone
+        // sends it if it runs; a helper's phone opens the same call by its own deadline.
+        for (plan in state.alive.filter { !it.ended }) {
+            when {
+                plan.owner != ownPersonId -> if (AliveLogic.status(plan, false, ownPersonId, now).phase == AliveStatus.ALARM) openAliveCall(plan)
+                plan.sentMids.isNotEmpty() && plan.state == AnmpAliveState.MISSED && now >= plan.due + plan.alarm -> raiseAliveCall(plan, now)
+            }
+        }
+        // Alarms left at the relays that a newer sign of life replaced, but whose deletion did not get through yet.
+        state.alive.filter { it.owner == ownPersonId && it.guards.size > (if (it.ended) 0 else 1) }.forEach { cs.launch { runCatching { sweepGuards(it.id) } } }
         return@onCore aliveNextAt(now)
     }
 
     /** Answers a watched sign of life as a helper ([AnmpCareState]): looking after it, away, back. */
     suspend fun careAlive(planId: String, careState: Int): Boolean = onCore {
         val plan = state.alive.firstOrNull { it.id == planId && it.owner != ownPersonId } ?: return@onCore false
+        return@onCore sendCare(plan, careState)
+    }
+
+    private suspend fun sendCare(plan: AlivePlan, careState: Int): Boolean {
+        val planId = plan.id
         val ts = now()
         val id = messageIdOf(null)
         val care = AnmpCare(B64.decode(planId), careState)
-        val sent = postCircle(plan.circleId, AnmpKind.CARE, content(id = id, care = care, ts = ts / 1000), notify = true) != null
+        val sent = if (plan.peer != null) postPerson(plan.owner, AnmpKind.CARE, content(id = id, care = care, ts = ts / 1000), notify = true)
+        else postCircle(plan.circleId, AnmpKind.CARE, content(id = id, care = care, ts = ts / 1000), notify = true) != null
         if (sent) {
             putCare(planId, AliveCare(ownPersonId, careState, ts))
-            radio?.let { way -> cs.launch { runCatching { way.care(plan.circleId, id, ts / 1000, care) } } }
+            if (plan.peer != null) radio?.let { way -> cs.launch { runCatching { way.careTo(devicesOfPerson(plan.owner).ifEmpty { setOf(plan.owner) }, id, ts / 1000, care) } } }
+            else radio?.let { way -> cs.launch { runCatching { way.care(plan.circleId, id, ts / 1000, care) } } }
         }
-        return@onCore sent
+        return sent
     }
 
     private fun ownPlan(planId: String): AlivePlan? = state.alive.firstOrNull { it.id == planId && it.owner == ownPersonId && !it.ended }
@@ -3429,22 +3820,118 @@ class AnmpCore(
             confirming -> AliveLogic.nextDue(now, plan.quiet, plan.until)
             else -> plan.due
         }
+        val over = st == AnmpAliveState.END || st == AnmpAliveState.TIMEOUT
         val next = plan.copy(
             state = st, lastAt = now, receivedAt = now, due = due, battery = battery ?: plan.battery,
             confirmedAt = if (confirming) now else plan.confirmedAt,
+            // Once it is over, the phone no longer keeps where it was (ADR 0121 §10).
+            position = plan.position.takeIf { !over },
         )
         val id = messageIdOf(mid)
         val wire = AnmpAlive(
             B64.decode(plan.id), st, plan.start / 1000, plan.until / 1000, due / 1000, (plan.hint / 1000).toInt(), (plan.alarm / 1000).toInt(),
             (plan.quiet / 1000).toInt(), plan.motion, plan.label.takeIf { it.isNotEmpty() }, next.battery,
+            // The place leaves the phone only when nobody confirmed (ADR 0121 §10), never with a confirmation.
+            plan.position?.takeIf { st == AnmpAliveState.MISSED }?.toWire(),
+            // This phone calls the helpers itself when their alarm is due; a reader woken by this packet waits for that.
+            calls = st == AnmpAliveState.MISSED,
+            watch = plan.watch?.takeIf { plan.peer != null }?.let { B64.decode(it) },
         )
         val wake = !confirming || now >= plan.due
-        postCircle(plan.circleId, AnmpKind.ALIVE, content(id = id, alive = wire, ts = now / 1000), notify = wake) ?: return null
+        if (plan.peer != null) {
+            if (!postPerson(plan.peer, AnmpKind.ALIVE, content(id = id, alive = wire, ts = now / 1000), notify = wake)) return null
+        } else {
+            postCircle(plan.circleId, AnmpKind.ALIVE, content(id = id, alive = wire, ts = now / 1000), notify = wake) ?: return null
+        }
         // Also over radio, with the same message ID, so helpers without internet learn it (ADR 0083 §7).
-        radio?.let { way -> cs.launch { runCatching { way.alive(plan.circleId, id, now / 1000, wire) } } }
-        val sent = next.copy(sentMids = (plan.sentMids + B64.encode(id)).takeLast(4), unconfirmed = plan.unconfirmed + 1)
+        // Fields 14 and 15 stay behind over radio: they only matter to readers on the internet.
+        val overRadio = if (wire.calls || wire.watch != null) AnmpAlive(wire.plan, wire.state, wire.start, wire.until, wire.due, wire.hint, wire.alarm, wire.quiet, wire.motion, wire.label, wire.battery, wire.position) else wire
+        radio?.let { way ->
+            cs.launch {
+                runCatching {
+                    if (plan.peer == null) way.alive(plan.circleId, id, now / 1000, overRadio)
+                    else way.aliveTo(devicesOfPerson(plan.peer).ifEmpty { setOf(plan.peer) }, id, now / 1000, overRadio)
+                }
+            }
+        }
+        // The watch at the relays (ADR 0083 §5.7): a finished alarm for the case that nothing comes from this phone any
+        // more. The one of the sign of life before goes, also when this one leaves none.
+        val guard = if (over) null else postGuard(plan, wire, now)
+        val sent = next.copy(
+            sentMids = (plan.sentMids + B64.encode(id)).takeLast(4), unconfirmed = plan.unconfirmed + 1,
+            guards = (plan.guards + listOfNotNull(guard)).takeLast(MAX_GUARDS),
+        )
         putPlan(sent)
+        if (sent.guards.size > (if (guard == null) 0 else 1)) cs.launch { runCatching { sweepGuards(plan.id) } }
+        // Confirmed or ended on purpose: a call that came from this sign of life gets its all-clear.
+        if (confirming || st == AnmpAliveState.END) {
+            state.sos.filter { it.own && !it.ended && it.plan == plan.id }.forEach { sendSos(it.copy(ended = true), AnmpSos.ENDED, keep = true) }
+        }
         return sent
+    }
+
+    /**
+     * Leaves the alarm „nicht erreichbar“ for the sign of life [wire] of [plan] at the relays (ADR 0083 §5.7): the same
+     * plan in state missed with field 13, and with the place the phone was handed if the person allowed it. The relays
+     * keep it back until the helpers' own deadline rings ([AliveLogic.guardAt]) and release it then, unless a newer
+     * sign of life deleted it before (ANDP §19). It never goes over radio. Returns `space/entry`, or `null` if none was
+     * left: the time is too near or beyond what relays keep, or the circle is gone.
+     */
+    private suspend fun postGuard(plan: AlivePlan, wire: AnmpAlive, now: Long): String? {
+        transport.cancelGroup(guardGroup(plan.id))
+        val k = guardKeys(plan) ?: return null
+        val at = AliveLogic.guardAt(wire.due, wire.alarm)
+        // Released, it stays a while for helpers who were offline, as far as the relays keep entries at all.
+        val until = minOf(lifetimeUntil(), at + AliveLogic.GUARD_KEPT / 1000)
+        if (at * 1000 - now < AliveLogic.GUARD_MIN_AHEAD + Transport.HOLD_MARGIN || until < at + 60) return null
+        val alarm = AnmpAlive(
+            wire.plan, AnmpAliveState.MISSED, wire.start, wire.until, wire.due, wire.hint, wire.alarm, wire.quiet, wire.motion, wire.label, wire.battery,
+            plan.position?.toWire(), guard = true, calls = true,
+        )
+        // The call this alarm is for the helpers rides along (ADR 0083 §5.4), with where the phone was before.
+        val call = AnmpSos(
+            AnmpSos.aliveId(wire.plan, wire.due), AnmpSos.RAISED, plan.position?.toWire(), wire.battery,
+            plan.trail.takeIf { plan.position != null }?.filter { it.valid }?.takeLast(AnmpSos.MAX_TRAIL)?.map { it.toWire() }?.takeIf { it.isNotEmpty() },
+            at, wire.plan,
+        )
+        // The time of the sign of life it stands for: readers that know a newer one drop it.
+        val encoded = Packets.encode(me, AnmpKind.ALIVE, content(id = messageIdOf(null), alive = alarm, sos = call, ts = now / 1000), guardScope(plan), k, null)
+        val entry = k.anmp.envelope.seal(encoded.packet, k.space.toString())
+        transport.submit(k.space, entry, until, notify = true, known = circleAccess(k), notBefore = at, group = guardGroup(plan.id))
+        return k.space.toString() + "/" + ID.of(entry)
+    }
+
+    private fun guardGroup(planId: String) = "alive-guard:$planId"
+
+    /**
+     * Where the alarm of [plan] is left: the circle space, or for a plan that goes to one person the space of the
+     * plan's own secret, which the phone can delete from (in someone else's mailbox it could not, ADR 0121 §23).
+     */
+    private suspend fun guardKeys(plan: AlivePlan): CircleKeys? =
+        if (plan.peer != null) plan.watch?.let { runCatching { CircleKeys.of(it) }.getOrNull() } else currentCircle(plan.circleId)?.second
+
+    /** The scope the alarm of [plan] is bound to: the circle ID, or the plan ID in the plan's own space. */
+    private fun guardScope(plan: AlivePlan): String = if (plan.peer != null) plan.id else plan.circleId
+
+    /**
+     * Deletes the alarms of [planId] at the relays that a newer sign of life replaced: all but the newest, all once the
+     * plan is over. One whose deletion does not get through stays on the list for the next try; helpers that know the
+     * newer sign of life drop it anyway.
+     */
+    private suspend fun sweepGuards(planId: String) {
+        val plan = state.alive.firstOrNull { it.id == planId && it.owner == ownPersonId } ?: return
+        val old = if (plan.ended) plan.guards else plan.guards.dropLast(1)
+        if (plan.ended) transport.cancelGroup(guardGroup(planId))
+        val k = guardKeys(plan)
+        val gone = old.filter { g ->
+            val space = g.substringBefore('/')
+            // After a key change the old space is no longer ours to delete in; the entry expires there.
+            if (k == null || space != k.space.toString()) return@filter true
+            val id = runCatching { ID.parse(g.substringAfter('/')) }.getOrNull() ?: return@filter true
+            transport.deleteEntry(circleAccess(k).cred, k.space, id)
+        }
+        if (gone.isEmpty()) return
+        update { s -> s.copy(alive = s.alive.map { if (it.id == planId) it.copy(guards = it.guards - gone.toSet()) else it }) }
     }
 
     private suspend fun putPlan(plan: AlivePlan) {
@@ -3457,6 +3944,10 @@ class AnmpCore(
         // Packets carry seconds: within the same second the answer that came last wins.
         if (plan.care.any { it.person == care.person && (it.ts > care.ts || (it.ts == care.ts && it.state == care.state)) }) return
         putPlan(plan.copy(care = plan.care.filterNot { it.person == care.person } + care))
+        // „Ich schaue nach“ answers the call that came from the plan, too (ADR 0083 §5.4).
+        if (care.state == AnmpCareState.LOOKING && care.person != plan.owner) {
+            state.sos.filter { it.plan == planId && !it.ended && care.person !in it.caring && care.ts >= it.start - 1000 }.forEach { putSos(it.copy(caring = it.caring + care.person)) }
+        }
     }
 
     /**
@@ -3465,28 +3956,68 @@ class AnmpCore(
      * keeps the known label. [receipt]: confirm it over the internet (over radio the radio way confirms it). `false` if
      * the packet is invalid or belongs to another person or circle; a packet already known counts as valid.
      */
-    private suspend fun onAlive(circle: CircleState, fromDevice: String, person: String, mid: ByteArray?, ts: Long, a: AnmpAlive, receipt: Boolean = true): Boolean {
+    private suspend fun onAlive(circleId: String, fromDevice: String, person: String, mid: ByteArray?, ts: Long, a: AnmpAlive, receipt: Boolean = true, call: AnmpSos? = null, viaWatch: Boolean = false): Boolean {
+        // In a circle, or (empty [circleId]) for us alone, like a direct message: then the sender is the other person.
+        val peer = person.takeIf { circleId.isEmpty() }
         if (!AliveLogic.valid(a)) return false
         val id = B64.encode(a.plan)
         val at = maxOf(ts * 1000, a.start * 1000)
         val known = state.alive.firstOrNull { it.id == id }
-        if (known != null && (known.circleId != circle.id || known.owner != person)) return false
+        if (known != null && (known.circleId != circleId || known.owner != person)) return false
+        // The alarm of a plan for one person lies in the plan's own space; one that comes as a direct packet is not
+        // taken, and nothing but that alarm is taken from there.
+        if (peer != null && a.guard != viaWatch) return false
+        if (a.guard) {
+            if (guardCounts(a, at, person, known)) {
+                // Nothing came since the sign of life it was written with: what we know of that one stays, the alarm
+                // adds where the phone was. The deadline of this device and this alarm are one and the same alarm.
+                val plan = known ?: AlivePlan(
+                    id = id, circleId = circleId, peer = peer, owner = person, label = a.label.orEmpty(), start = a.start * 1000, until = a.until * 1000,
+                    due = a.due * 1000, hint = a.hint * 1000L, alarm = a.alarm * 1000L, quiet = a.quiet * 1000L, motion = a.motion,
+                    state = AnmpAliveState.OK, lastAt = at, receivedAt = now(), battery = a.battery?.coerceIn(0, 100), confirmedAt = at,
+                )
+                val next = plan.copy(guard = true, position = AlivePosition.of(a.position) ?: plan.position)
+                if (next != known) putPlan(next)
+                // That alarm is a call for the helpers; the alarm brought it along (field 44).
+                if (AliveLogic.status(next, false, ownPersonId, now()).phase == AliveStatus.ALARM) openAliveCall(next, call)
+            }
+            return true
+        }
         if (known != null && (at < known.lastAt || (at == known.lastAt && !replacesInSameSecond(a.state, known.state)))) {
-            // The same packet over the internet after the radio one, which had to leave the label behind.
-            a.label?.takeIf { it.isNotEmpty() && known.label.isEmpty() }?.let { putPlan(known.copy(label = it)) }
+            // The same packet over the internet after the radio one, which had to leave the label or the place behind.
+            val label = a.label?.takeIf { it.isNotEmpty() && known.label.isEmpty() }
+            val place = AlivePosition.of(a.position)?.takeIf { at == known.lastAt && a.state == known.state && known.position == null }
+            if (label != null || place != null) putPlan(known.copy(label = label ?: known.label, position = place ?: known.position))
             return true
         }
         val confirming = a.state == AnmpAliveState.OK || a.state == AnmpAliveState.MOVING || a.state == AnmpAliveState.START
         val plan = AlivePlan(
-            id = id, circleId = circle.id, owner = person, label = a.label ?: known?.label.orEmpty(), start = a.start * 1000, until = a.until * 1000,
+            id = id, circleId = circleId, peer = peer, owner = person, label = a.label ?: known?.label.orEmpty(), start = a.start * 1000, until = a.until * 1000,
             due = a.due * 1000, hint = a.hint * 1000L, alarm = a.alarm * 1000L, quiet = a.quiet * 1000L, motion = a.motion,
             state = a.state.takeIf { it in AnmpAliveState.START..AnmpAliveState.TIMEOUT } ?: AnmpAliveState.OK, lastAt = at, receivedAt = now(),
             battery = a.battery?.coerceIn(0, 100), confirmedAt = if (confirming) at else known?.confirmedAt ?: at,
             care = known?.care.orEmpty(), heard = known?.heard.orEmpty(), sentMids = known?.sentMids.orEmpty(), unconfirmed = known?.unconfirmed ?: 0,
+            // Of others: the place of this packet or none. Of the own person: what this phone was handed stays.
+            position = AlivePosition.of(a.position) ?: known?.position?.takeIf { person == ownPersonId },
+            // Over radio the secret stays behind; the internet copy of the packet or the next one brings it.
+            watch = a.watch?.takeIf { peer != null && it.size == 32 }?.let { B64.encode(it) } ?: known?.watch,
         )
         putPlan(plan)
+        if (person != ownPersonId && (confirming || a.state == AnmpAliveState.END)) endAliveCalls(id, at)
         if (receipt && person != ownPersonId) mid?.takeIf { it.size == Anmp.ID_BYTES }?.let { confirmReceipt(fromDevice, B64.encode(it), AnmpArrived.INTERNET) }
         return true
+    }
+
+    /**
+     * Whether an alarm the relays released (field 13, ADR 0083 §5.7) counts at [at], the time of the sign of life it
+     * was written with: not our own person's, not before its time by our clock (a relay that released it early), and
+     * not if we know a newer sign of life of the plan or its end, e.g. one that came over radio. Otherwise it is
+     * dropped without a trace.
+     */
+    private suspend fun guardCounts(a: AnmpAlive, at: Long, person: String, known: AlivePlan?): Boolean {
+        if (person == ownPersonId) return false
+        if (now() + timings.aliveGuardEarly.inWholeMilliseconds < AliveLogic.guardAt(a.due, a.alarm) * 1000) return false
+        return known == null || (!known.ended && known.lastAt <= at)
     }
 
     /**
@@ -3504,10 +4035,11 @@ class AnmpCore(
     }
 
     /** Answer of a helper; from any member of the circle of the plan. */
-    private suspend fun onCare(circle: CircleState, person: String, ts: Long, c: AnmpCare) {
+    private suspend fun onCare(circleId: String, person: String, ts: Long, c: AnmpCare) {
         if (c.plan.size != Anmp.ID_BYTES || c.state !in AnmpCareState.LOOKING..AnmpCareState.BACK) return
         val id = B64.encode(c.plan)
-        if (state.alive.none { it.id == id && it.circleId == circle.id }) return
+        // For a plan that goes to one person only that person answers.
+        if (state.alive.none { it.id == id && it.circleId == circleId && (it.peer == null || it.peer == person) }) return
         putCare(id, AliveCare(person, c.state, ts * 1000))
     }
 
@@ -4517,6 +5049,31 @@ class AnmpCore(
         return shelf.entries()
     }
 
+    // --- Map tiles (ADR 0121 §11) ----------------------------------------------------------------
+
+    /** `true` if map tiles are published in this network. */
+    val hasMaps: Boolean get() = maps != null && mapData != null
+
+    /**
+     * The root lists of the map the owner of the map space published, unparsed; `null` without the space or if no
+     * holder answered. Only the owner writes there; what a list says is the app's business.
+     */
+    suspend fun mapLists(): List<ByteArray>? {
+        val shelf = maps ?: return null
+        opened.await()
+        return shelf.entries()
+    }
+
+    /**
+     * The object [id] from the space of the map data: the list of a region or a tile, at most [maxBytes]. `null` if
+     * it cannot be had. The reader key is a random one of this start, not the person's.
+     */
+    suspend fun mapPackage(id: String, maxBytes: Long = MAP_PACKAGE_MAX): ByteArray? {
+        val shelf = mapData ?: return null
+        opened.await()
+        return shelf.get(id, maxBytes)
+    }
+
     // --- Radio inbox (ADR 0051) ------------------------------------------------------------------
 
     /** `true` if the radio inbox is set up for this network; without it there is no uplink and no patron. */
@@ -4590,17 +5147,32 @@ class AnmpCore(
 
             override suspend fun onAlive(circleId: String, fromDevice: String, mid: ByteArray?, ts: Long, alive: AnmpAlive): Boolean =
                 withContext(serial) {
-                    val circle = circle(circleId) ?: return@withContext false
+                    // An empty circle ID: a direct packet, for us alone (ADR 0121 §23); only from a device we know, as
+                    // in the mailbox.
                     val person = this@AnmpCore.personOf(fromDevice)
-                    this@AnmpCore.onAlive(circle, fromDevice, person, mid, ts, alive, receipt = false) && person != ownPersonId
+                    if (circleId.isEmpty()) {
+                        if (person == ownPersonId || pinnedKey(fromDevice) == null) return@withContext false
+                    } else if (circle(circleId) == null) return@withContext false
+                    this@AnmpCore.onAlive(circleId, fromDevice, person, mid, ts, alive, receipt = false) && person != ownPersonId
                 }
 
+            override suspend fun onPlace(fromDevice: String, ts: Long, place: AnmpPlace) = withContext(serial) {
+                this@AnmpCore.onPlace(this@AnmpCore.personOf(fromDevice), ts, place)
+            }
+
+            override suspend fun onSos(circleId: String, fromDevice: String, ts: Long, sos: AnmpSos) = withContext(serial) {
+                if (circleId.isEmpty()) this@AnmpCore.onSos(this@AnmpCore.personOf(fromDevice), null, ts, sos)
+                else if (circle(circleId) != null) this@AnmpCore.onSos(this@AnmpCore.personOf(fromDevice), circleId, ts, sos)
+            }
+
             override suspend fun onCare(circleId: String, fromDevice: String, ts: Long, care: AnmpCare) = withContext(serial) {
-                circle(circleId)?.let { this@AnmpCore.onCare(it, this@AnmpCore.personOf(fromDevice), ts, care) } ?: Unit
+                if (circleId.isEmpty()) this@AnmpCore.onCare("", this@AnmpCore.personOf(fromDevice), ts, care)
+                else circle(circleId)?.let { this@AnmpCore.onCare(it.id, this@AnmpCore.personOf(fromDevice), ts, care) } ?: Unit
             }
 
             override suspend fun onReceipt(fromDevice: String, mids: List<String>) = withContext(serial) {
                 onAliveReceipt(this@AnmpCore.personOf(fromDevice), mids)
+                onSosReceipt(this@AnmpCore.personOf(fromDevice), mids)
             }
 
             override suspend fun uplink(packet: ByteArray): Boolean = uplinkRadioPacket(packet)
@@ -4639,7 +5211,8 @@ class AnmpCore(
      */
     suspend fun radioTextPacket(
         circleId: String?, deviceId: String?, mid: String, tsMillis: Long, text: String, replyTo: String? = null, replyFrom: String? = null,
-    ): ByteArray? = radio?.textPacket(circleId, deviceId, mid, tsMillis, text, replyTo, replyFrom)
+        spot: MessageSpot? = null, place: PlaceShare? = null,
+    ): ByteArray? = radio?.textPacket(circleId, deviceId, mid, tsMillis, text, replyTo, replyFrom, spot, place)
 
     /**
      * Queues an own message [mid] with [text] at [tsMillis] for the radio, in circle [circleId] or direct to the device
@@ -4650,8 +5223,12 @@ class AnmpCore(
      */
     suspend fun queueRadioText(
         circleId: String?, deviceId: String?, mid: String, tsMillis: Long, text: String, replyTo: String? = null, replyFrom: String? = null,
+        /** A meeting point, „Wo bist du?“ or the answer (ADR 0121 §8); goes along if it fits. */
+        spot: MessageSpot? = null,
+        /** Direct only: what the reader sees of the sender's place (ADR 0121 §20); goes along if it fits. */
+        place: PlaceShare? = null,
     ) {
-        val entry = RadioQueued(mid, circleId, deviceId, tsMillis, text, replyTo = replyTo, replyFrom = replyFrom)
+        val entry = RadioQueued(mid, circleId, deviceId, tsMillis, text, replyTo = replyTo, replyFrom = replyFrom, spot = spot, place = place.takeIf { circleId == null })
         radioLock.withLock {
             radio?.queueText(entry) ?: RadioQueue.save(platform.store, RadioQueue.load(platform.store).filterNot { it.key == entry.key } + entry)
         }
@@ -4914,7 +5491,7 @@ class AnmpCore(
                         continue
                     }
                     val packet = openEnvelope(l, data) ?: continue
-                    val p = Packets.open(me, packet, l.scope, (l as? Listed.Circle)?.keys, ::peerByTag) ?: continue
+                    val p = Packets.open(me, packet, l.scope, (l as? Listed.Circle)?.keys ?: (l as? Listed.Watch)?.keys, ::peerByTag) ?: continue
                     if (isRevoked(p.fromDevice)) continue
                     if (p.fromDevice == me.deviceId) continue
                     // Written on another own device (circle message, reaction): nothing to ring for.
@@ -4930,7 +5507,33 @@ class AnmpCore(
                             reactionEvent(Conversation.Direct(personOf(p.fromDevice)), p, id)
                         // Sign of life of another person in the circle (ADR 0083); the app decides what to show.
                         l is Listed.Circle && p.kind == AnmpKind.ALIVE && !p.toUs -> p.content.alive?.takeIf { AliveLogic.valid(it) }?.let {
-                            CoreEvent.AliveWake(id, l.circleId, personOf(p.fromDevice), it, maxOf(p.content.ts, it.start) * 1000)
+                            val at = maxOf(p.content.ts, it.start) * 1000
+                            val owner = personOf(p.fromDevice)
+                            // A released alarm we know a newer sign of life for is dropped without a sound (ADR 0083 §5.7).
+                            val stale = it.guard && !guardCounts(it, at, owner, state.alive.firstOrNull { k -> k.id == B64.encode(it.plan) && k.owner == owner })
+                            val call = if (it.guard || it.state == AnmpAliveState.MISSED) B64.encode(AnmpSos.aliveId(it.plan, it.due)) else null
+                            if (stale) null else CoreEvent.AliveWake(id, l.circleId, owner, it, at, call)
+                        }
+                        // A sign of life for this person alone, like a direct message (ADR 0121 §23).
+                        l is Listed.Inbox && p.kind == AnmpKind.ALIVE && p.toUs -> p.content.alive?.takeIf { AliveLogic.valid(it) && !it.guard }?.let {
+                            val call = if (it.state == AnmpAliveState.MISSED) B64.encode(AnmpSos.aliveId(it.plan, it.due)) else null
+                            CoreEvent.AliveWake(id, "", personOf(p.fromDevice), it, maxOf(p.content.ts, it.start) * 1000, call)
+                        }
+                        // The alarm the relays released for a sign of life that goes to this person alone (ADR 0121 §23).
+                        l is Listed.Watch && p.kind == AnmpKind.ALIVE -> p.content.alive?.takeIf { AliveLogic.valid(it) && it.guard && B64.encode(it.plan) == l.planId }?.let {
+                            val at = maxOf(p.content.ts, it.start) * 1000
+                            val owner = personOf(p.fromDevice)
+                            val counts = guardCounts(it, at, owner, state.alive.firstOrNull { k -> k.id == l.planId && k.owner == owner })
+                            if (counts) CoreEvent.AliveWake(id, "", owner, it, at, B64.encode(AnmpSos.aliveId(it.plan, it.due))) else null
+                        }
+                        // A call for the helpers, into the circle or directly (ADR 0083 §2); the app decides how loud.
+                        p.kind == AnmpKind.SOS && (l is Listed.Circle || (l is Listed.Inbox && p.toUs)) -> p.content.sos?.takeIf { it.plausible && it.state == AnmpSos.RAISED }?.let {
+                            val owner = personOf(p.fromDevice)
+                            val callId = B64.encode(it.id)
+                            val known = state.sos.firstOrNull { c -> c.id == callId }
+                            val plan = it.plan?.let { b -> B64.encode(b) }
+                            val counts = known?.ended != true && (known == null || known.owner == owner) && aliveCallCounts(owner, plan, p.content.ts * 1000, known)
+                            if (counts) CoreEvent.SosWake(id, callId, (l as? Listed.Circle)?.circleId, owner, plan, p.content.ts * 1000) else null
                         }
                         else -> null
                     }
@@ -4946,6 +5549,7 @@ class AnmpCore(
                 is CoreEvent.Reaction -> it.timestampMillis
                 is CoreEvent.Alert -> it.item.ts * 1000
                 is CoreEvent.AliveWake -> it.timestampMillis
+                is CoreEvent.SosWake -> it.timestampMillis
                 else -> 0L
             }
         }
@@ -6004,7 +6608,18 @@ class AnmpCore(
             AnmpKind.CIRCLE, AnmpKind.DIRECT, AnmpKind.REACT, AnmpKind.DELETE, AnmpKind.MEMBER, AnmpKind.META,
             AnmpKind.PROFILE, AnmpKind.LEFT, AnmpKind.REKEY, AnmpKind.REMOVED,
         )
+        /** An ended call for the helpers stays this long, so that the all-clear is seen. */
+        private const val SOS_KEPT_MILLIS = 24 * 3_600_000L
+
+        /** A place on the relays is news for a day at most (ADR 0121 §5). */
+        private val PLACE_LIFETIME = 1.days
+        private const val SOS_MIDS = 30
+        /** A map tile or a list of a region is small; anything beyond this is not one. */
+        const val MAP_PACKAGE_MAX = 4L shl 20
         private const val WAKE_SEEN_MAX = 300
+
+        /** Alarms left at the relays a plan remembers until it saw them deleted (ADR 0083 §5.7). */
+        private const val MAX_GUARDS = 8
         private val WAKE_RECEIPT_TIMEOUT = 5.seconds
         private const val MAX_TRACKED = 1_000
         private const val MAX_ATTACHMENTS = 5

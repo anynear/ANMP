@@ -17,6 +17,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -39,6 +40,11 @@ internal data class PendingObject(
     val space: String? = null,
     /** Failed tries so far (ADR 0090): after a restart the plan goes on at this step. */
     val tries: Int = 0,
+    /**
+     * Entry the relays keep back until then (Unix seconds, ANDP §19); `0` for an ordinary object. Written only to relays
+     * that announce the extension, and no longer once the time is near: it would be delivered at once.
+     */
+    val notBefore: Long = 0,
 )
 
 /**
@@ -63,6 +69,8 @@ internal data class PendingJob(
      * after the contents and before [entry], which then has no refs of its own and may live without expiry.
      */
     val hold: PendingObject? = null,
+    /** Writes that replace each other ([Transport.cancelGroup]); `""` for none. */
+    val group: String = "",
 )
 
 /** Outcome of a read of a content. */
@@ -122,6 +130,41 @@ internal class Transport(
         return true
     }
 
+    /**
+     * Withdraws every pending write of [group], like [cancel]: a newer one takes their place. What a relay already has
+     * stays there.
+     */
+    suspend fun cancelGroup(group: String): Boolean {
+        if (group.isEmpty()) return false
+        val jobs = load().filter { it.group == group }
+        if (jobs.isEmpty()) return false
+        lock.withLock { cancelled += jobs.map { it.id } }
+        jobs.forEach { drop(it) }
+        wake.kick()
+        return true
+    }
+
+    /** Relay node → whether it announces the extension not_before (ANDP §19) and when we asked (ms). */
+    private val holding = mutableMapOf<String, Pair<Boolean, Long>>()
+
+    /**
+     * Whether [relay] keeps entries back until a time (ANDP §19 rule 3: only where announced; a relay without the
+     * extension would deliver at once). Asked at most once per [HOLDING_TTL]; without an answer it counts as no.
+     */
+    private suspend fun holds(relay: Relay, client: app.anynear.andp.AndpClient): Boolean {
+        val now = platform.clock.nowMillis()
+        lock.withLock { holding[relay.node.toString()] }?.let { (ok, at) -> if (now - at in 0 until HOLDING_TTL) return ok }
+        val ok = try {
+            client.info().hasExtension(app.anynear.andp.Andp.EXTENSION_NOT_BEFORE)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            return false
+        }
+        lock.withLock { holding[relay.node.toString()] = ok to now }
+        return ok
+    }
+
     /** Starts every pending write again (after a restart). */
     suspend fun resumeAll() {
         val now = platform.clock.nowMillis()
@@ -158,6 +201,10 @@ internal class Transport(
          * an [entry] without expiry does not count them on the space's quota for ever.
          */
         hold: ByteArray? = null,
+        /** Keep the entry back at the relays until then (Unix seconds, ANDP §19); only for an entry without contents. */
+        notBefore: Long = 0,
+        /** Writes of the same group replace each other, see [cancelGroup]. */
+        group: String = "",
     ): PendingJob {
         val jobId = ID.of(space.unsafe() + (entry ?: ByteArray(0)) + contents.flatMap { it.first.bytes.toList() }.toByteArray() + platform.clock.nowMillis().toString().encodeToByteArray()).toString().take(22)
         contents.forEach { (id, bytes) -> platform.blobs.write(blobName(jobId, id.toString()), bytes) }
@@ -173,9 +220,11 @@ internal class Transport(
         val entryObject = entry?.let { e ->
             val id = ID.of(e)
             platform.blobs.write(blobName(jobId, id.toString()), e)
-            PendingObject(id.toString(), e.size.toLong(), until, entry = true, refs = (if (holdObject == null) own else emptyList()) + refs, revokes = revokes)
+            PendingObject(id.toString(), e.size.toLong(), until, entry = true, refs = (if (holdObject == null) own else emptyList()) + refs, revokes = revokes,
+                notBefore = notBefore)
         }
-        val job = PendingJob(jobId, space.toString(), contentObjects, entryObject, ref, notify, platform.clock.nowMillis(), alarm = notify && alarm, hold = holdObject)
+        val job = PendingJob(jobId, space.toString(), contentObjects, entryObject, ref, notify, platform.clock.nowMillis(), alarm = notify && alarm, hold = holdObject,
+            group = group)
         save { it + job }
         scope.launch { run(job, known, knownContent) }
         return job
@@ -257,6 +306,8 @@ internal class Transport(
         while (platform.clock.nowMillis() < deadline) {
             if (isCancelled(job)) break
             if (obj.until != 0L && obj.until * 1000 <= platform.clock.nowMillis()) break
+            // Too late to keep it back: a relay would deliver it at once, as an alarm nobody meant (ANDP §19 rule 7).
+            if (tooLateToHold(obj)) break
             val targets = net.holders(key)
             if (targets.isEmpty()) {
                 net.await(timings.writeRetry.waitAfter(tries + 1))
@@ -298,15 +349,19 @@ internal class Transport(
 
     private enum class PutOutcome { OK, REFUSED, FORBIDDEN, RETRY }
 
+    private fun tooLateToHold(obj: PendingObject): Boolean =
+        obj.notBefore != 0L && obj.notBefore * 1000 - platform.clock.nowMillis() < HOLD_MARGIN
+
     private suspend fun put(relay: Relay, a: SpaceAccess, space: String, obj: PendingObject, bytes: ByteArray, notify: Boolean, alarm: Boolean): PutOutcome {
         val client = pool.client(relay) ?: return PutOutcome.REFUSED
         return try {
+            if (obj.notBefore != 0L && (tooLateToHold(obj) || !holds(relay, client))) return PutOutcome.REFUSED
             val meta = sign(a, ID.parse(obj.id), bytes.size.toLong(), obj.until, if (obj.entry) Placement.SPACE else Placement.OBJECT, obj.refs,
                 revokes = obj.revokes?.let { Hash.parse(it) })
             val wake = notify && obj.entry
             client.put(
                 Credentials(if (meta.writer == a.space) a.owner ?: a.signer else a.signer), meta, bytes,
-                PutOptions(noNotify = !wake, watchSkip = if (wake) ownWatchId() else "", alarm = wake && alarm),
+                PutOptions(noNotify = !wake, watchSkip = if (wake) ownWatchId() else "", alarm = wake && alarm, notBefore = obj.notBefore),
             )
             pool.ok(relay.node)
             PutOutcome.OK
@@ -431,6 +486,19 @@ internal class Transport(
         }
     }
 
+    /** [delete] of an entry that tells whether a relay took the tombstone (it then reaches the other holders, ANDP §8). */
+    suspend fun deleteEntry(cred: Credentials, space: Key, id: ID): Boolean {
+        val done = coroutineScope {
+            net.readOrder(space.toString()).map { relay ->
+                async {
+                    val c = pool.client(relay) ?: return@async false
+                    runCatching { c.delete(cred, space, id) }.onSuccess { pool.ok(relay.node) }.isSuccess
+                }
+            }.map { it.await() }
+        }
+        return done.any { it }
+    }
+
     private suspend fun markDone(job: PendingJob, objectId: String, node: String) = save { list ->
         list.map { j ->
             if (j.id != job.id) j else j.copy(
@@ -474,6 +542,12 @@ internal class Transport(
 
         /** How often a message refused for a revoked grant is tried with another grant of the same mailbox. */
         private const val MAX_GRANT_RETRIES = 3
+
+        /** An entry to keep back is no longer written this close to its time (clocks differ, writes take a moment). */
+        const val HOLD_MARGIN = 30_000L
+
+        /** How long what a relay announced about keeping entries back is taken as given. */
+        private const val HOLDING_TTL = 10 * 60_000L
         private val serializer = ListSerializer(PendingJob.serializer())
 
         fun blobName(job: String, id: String) = "core/job/$job/$id"

@@ -53,6 +53,10 @@ data class CircleState(
     val image: ImageRef? = null,
     val imageTs: Long = 0,
     val imageBy: String = "",
+    /** The places of the circle (ADR 0121 §21), with time (ms) and device of the last change of the list. */
+    val places: List<CirclePlace> = emptyList(),
+    val placesTs: Long = 0,
+    val placesBy: String = "",
     val joinedAt: Long = 0,
     /** Joined by invitation, history not yet complete (ADR 0014). */
     val historyPending: Boolean = false,
@@ -214,6 +218,12 @@ internal data class CoreState(
     val circlesRead: List<String> = emptyList(),
     /** Own signs of life and those we watch (ADR 0083 §5). */
     val alive: List<AlivePlan> = emptyList(),
+    /** What other persons share of their place with us, one entry per person (ADR 0121 §3). */
+    val places: List<PersonPlace> = emptyList(),
+    /** Per person what we last told it of level and end (`level/until`), so that radio carries a change at once (ADR 0121 §13). */
+    val placesSent: Map<String, String> = emptyMap(),
+    /** Calls for the helpers: the own one and those of persons we help (kind sos, ADR 0083 §2). */
+    val sos: List<SosCall> = emptyList(),
     /** Persons whose mailbox refuses us (every holder 403), with since when (ms): person ID → time (ADR 0046). */
     val unreachable: Map<String, Long> = emptyMap(),
     /** Persons asking to become a contact (ADR 0116), not yet answered. */

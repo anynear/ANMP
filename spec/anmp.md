@@ -130,6 +130,9 @@ All fields are optional; which are set depends on the kind.
 | 39 | ask | bool | in `profile`: the sender asks to become a contact (ADR 0116 §7) | no |
 | 40 | intro | intro | in `direct`: a contact introduced to the reader (ADR 0116 §2) | no |
 | 41 | introReply | intro-reply | in `direct` without text: wants the introduced contact (to the introducer), or the request passed on (to the introduced person) (ADR 0116 §3) | no |
+| 42 | place | place | what the sender shares of its place with the reader (kind position; also in a direct message, ADR 0121 §3, §20) | yes |
+| 43 | spot | spot | in `circle` and `direct`: a meeting point, the question where the reader is, or the sender's place as the answer (ADR 0121 §8) | if it fits |
+| 44 | sos | sos | a call for the helpers or a helper's answer to it (kind sos, ADR 0083 §2–§4) | yes |
 
 Structures (see CDDL for types):
 
@@ -142,8 +145,10 @@ Structures (see CDDL for types):
 | intro | 0 card (CBOR `[body, sig]` of intro-card, sig by the person key of `by` over `anmp/v1/intro\n` ‖ body) · 1 image? (attachment of type `jpg`, the picture of the introduced person, in the space of the message) |
 | intro-card | 0 id 16 · 1 until s · 2 person (introduced, person ID 16) · 3 name (its own, ≤ 40) · 4 to (person ID 16) · 5 by (introducer, person ID 16) |
 | intro-reply | 0 card (the signed card answered) · 1 contact (contact link `https://…/c#…` of the person `to`) |
-| meta | 0 name · 1 nameTs ms · 2 nameBy 16 · 3 image? · 4 imageTs ms · 5 imageBy 16 |
-| alive | 0 plan (ID 8) · 1 state · 2 start s · 3 until s · 4 due s · 5 hint s · 6 alarm s · 7 quiet s · 8 motion? · 9 label (≤ 40)? · 10 battery %? |
+| meta | 0 name · 1 nameTs ms · 2 nameBy 16 · 3 image? · 4 imageTs ms · 5 imageBy 16 · 6 places? · 7 placesTs ms? · 8 placesBy 16? |
+| circle-place | 0 id 8 · 1 name (1–40 characters) · 2 lat · 3 lon (degrees × 10 000) · 4 radius m (1–5000) |
+| alive | 0 plan (ID 8) · 1 state · 2 start s · 3 until s · 4 due s · 5 hint s · 6 alarm s · 7 quiet s · 8 motion? · 9 label (≤ 40)? · 10 battery %? · 12 position? (11 is reserved) · 13 guard? · 14 calls? · 15 watch (32)? |
+| position | 0 lat (degrees × 10 000, north positive) · 1 lon (degrees × 10 000, east positive) · 2 at s (when the device located it) · 3 acc m? (accuracy) |
 | care | 0 plan (ID 8) · 1 state (1 looking, 2 away, 3 back) |
 | history | 0 circle · 1 count · 2 from ms? · 3 to ms? · 4 [* part]? |
 | part | 0 id (blob ID, 32) · 1 key 32 · 2 from (space, 32) · 3 SHA-256 of the plaintext 32 · 4 delete token 32? (pre-ANDP, no longer written) · 5 grant? (ANDP delete grant scoped to the part) |
@@ -200,7 +205,7 @@ in alive and care.
 | Code | Name | Paths | Key | scope | Fields |
 |---|---|---|---|---|---|
 | 1 | circle | internet, radio | circle | circle ID | 0, 2, 3/4, 11, 13/14, 15 |
-| 2 | direct | internet, radio | device pair | `""` | 0, 2, 3/4, 11, 13/14, 23/24 (internet) |
+| 2 | direct | internet, radio | device pair | `""` | 0, 2, 3/4, 11, 13/14, 23/24 (internet), 42 |
 | 3 | react | internet, radio | like the message reacted to | circle ID or `""` | 3, 4, 5 |
 | 4 | read | internet, radio | device pair | `""` | 6 |
 | 5 | receipt | internet, radio | device pair | `""` | 6 |
@@ -221,9 +226,11 @@ in alive and care.
 | 24 | unsubscribe | internet | device pair (owner's mailbox) | `""` | 33 |
 | 25 | channel-key | internet | device pair (subscriber's mailbox) | `""` | 33 |
 | 26 | delete | internet, radio | like the message deleted | circle ID or `""` | 3, 4 |
-| 27 | alive | internet, radio | circle | circle ID | 0, 1, 35 |
-| 28 | care | internet, radio | circle | circle ID | 0, 1, 36 |
+| 27 | alive | internet, radio | circle or device pair | circle ID, `""`, or the plan ID for a guard in the plan's own space | 0, 1, 35; 44 only with a guard |
+| 28 | care | internet, radio | circle or device pair | circle ID or `""` | 0, 1, 36 |
 | 29 | hold | internet | like the message it belongs to | circle ID or `""` | 0 |
+| 30 | position | internet, radio | device pair | `""` | 1, 42 |
+| 31 | sos | internet, radio | circle or device pair | circle ID or `""` | 0, 1, 44 |
 
 **Open packets** (ask, patron) are `41 4E 01` + CBOR `[h, b]` with an empty `b`: everything is in the header,
 everyone can read them, nobody decodes them.
@@ -270,6 +277,177 @@ internet, so readers merge both. Confirmations (ok, moving) of a plan go over ra
 other states always. If the whole plan does not fit, field 9 (label) stays behind; readers keep the label they know
 and take it from the internet copy of the same packet. A helper confirms a sign of life heard over radio with a
 receipt over radio. A care goes over radio like an alive packet.
+
+**A sign of life for one person** (ADR 0121 §23): instead of a circle the sender may choose one person. The packets
+then go to every device of that person like a direct message (device pair key, scope `""`), with the same fields and
+rules: the person is the only helper, confirms receipt, judges by its own deadline, and answers with a care packet
+sent to the sender's person the same way. A reader takes such a packet only from a contact, and a plan stays with the
+way of its first packet: a packet for a known plan that comes the other way is dropped. The call it turns into (see
+**A call from a sign of life**) goes to that person directly instead of into a circle.
+
+Over radio the packets (alive, care, and a call of kind sos for a single person) go as direct radio packets to each
+device of the person, with the same message ID as over the internet and the same limits as in a circle; fields 14
+and 15 stay behind, then the label, then the place. A reader confirms them over radio like those of a circle.
+
+The **guard** of such a plan cannot lie in the person's mailbox: a writer cannot delete there, so a guard could not
+be taken back with the next packet. Every packet of the plan over the internet therefore carries field 15 `watch`, a
+random secret of 32 bytes chosen with the plan. Both sides use it like a circle secret (see [Key derivation and
+identifiers](#key-derivation-and-identifiers)): circle space, circle key and circle envelope key of that secret give
+the **plan's own space**. The sender leaves the guard there exactly as in a circle space (`ANDP-Not-Before`, expiry,
+a new one with every packet, the one before deleted, all deleted with the end of the plan), as a packet in the form
+of a circle packet with the plan ID (b64u) as scope. The helper lists and watches that space while the plan runs and
+takes from it only a guard of that plan from the plan's owner, under the rules of **Guard**; anything else there is
+dropped. A guard that arrives as a direct packet is dropped, and a reader that knows no field 15 for a plan reads no
+such space. The secret is as confidential as the packets that carry it; whoever holds it could only write or delete
+an alarm of that plan.
+Vector: `radio.aliveWatch`.
+
+**Place** (ADR 0121 §10): a packet may carry where the sender's phone is (field 12): latitude and longitude in
+degrees × 10 000 (about 10 m), the time the phone located it and, if known, the accuracy in metres. The sender adds
+it only in state 4 (missed) and only if the person allowed it; confirmations never carry it. The place may be older
+than the packet: it is the last one the phone knows, and field 2 says from when. Readers keep the place of the
+newest packet of a plan; a newer packet without field 12 removes it, so helpers no longer see it once the person
+confirmed again. A place out of range (latitude beyond ±90°, longitude beyond ±180°, time 0, accuracy above
+100 km) is ignored and the packet stays valid; a place without one of the fields 0–2 makes the content invalid.
+Over radio, when the plan does not fit, first the label stays behind, then the place; readers take a missing place
+from the internet copy of the same packet. Readers that do not know field 12 skip it.
+
+**Guard** (ADR 0083 §5.7): helpers judge on their own, but a phone in the background cannot always wake at a
+deadline. So with every packet of an own plan that does not end it, the sender also leaves a finished alarm at the
+relays, for the case that nothing comes from it any more (switched off, no network): an alive packet of the same plan
+with a fresh message ID, the same sender time (content field 1) and the same plan fields as the packet it accompanies,
+state 4 (missed), field 13 `true` and, if the person allowed it, the place the phone knows (field 12). The same content
+carries the call the alarm stands for in field 44 (see **A call from a sign of life**): state 1, the ID of plan and
+`due`, field 6, start `due` + `alarm`, battery and, if the person allowed it, place and trail. It is written
+into the circle space with `ANDP-Not-Before` = `due` + `alarm` (ANDP §19), so the relays keep it back until the
+helpers' own deadline would ring, then list it and wake the watches of the space like for a new entry. Its expiry is
+7 days after that time (capped by the relay's `max_until`).
+
+- The sender writes it only to relays that announce `not_before`; others would deliver it at once. It leaves none
+  if `due` + `alarm` is less than a minute away or beyond what relays keep.
+- With the next packet of the plan the sender leaves a new guard and deletes the one before; a packet that ends the
+  plan (state 5 or 7) only deletes. A guard whose deletion did not get through is deleted again later.
+- A reader takes a guard only if it is not of its own person, its time has come (`due` + `alarm`, with 5 minutes
+  for clocks that differ: a relay that released it early rings nobody) and the reader knows no packet of the plan
+  with a newer sender time and no end of the plan, e.g. one heard over radio. Otherwise it drops the guard without
+  showing anything. A guard is never confirmed with a receipt.
+- A guard that counts changes neither the state nor the times the reader knows: nothing came since the packet it
+  was written with. It marks the plan as reported by the relays and adds the place. The helper's own deadline and
+  the guard mean the same plan and the same `due`; apps show one alarm, reason "unreachable" unless the last state
+  is 4. The mark and the place go with the next packet of the plan. Field 44 of a guard that counts is taken as the
+  call of that alarm if its ID is the one of plan and `due`; in a guard that does not count it is dropped with it.
+- A guard never goes over radio. Readers that do not know field 13 read it as a packet in state 4 with the sender
+  time of the packet it accompanied: they show it if they know nothing newer and drop it otherwise, like any older
+  packet. Readers that do not know field 44 skip it.
+
+**Calls** (field 14, ADR 0121 §22): `true` in a packet in state 4 and in a guard says that the sender's phone raises
+the call itself when the alarm is due (see **A call from a sign of life**). A reader that cannot keep a deadline by
+itself (a notification extension that only runs when a packet wakes it) then stays quiet for the packet in state 4
+and rings for the call; without field 14 the packet comes from a version that sends no call, and such a reader rings
+for it at once as before. Over radio field 14 is left out. Readers that do not know it skip it.
+
+**Places of a circle** (ADR 0121 §21): `meta` carries the places of the circle as one list (field 6, at most 20) with
+the time and device of its last change (fields 7 and 8), like the name and the picture: every member may change it,
+the newest list counts (ties: the larger device ID), and a list with a place out of range is dropped as a whole. A
+`meta` without field 7 says nothing about the places, so apps that do not know them leave them as they are. The
+places never leave the circle. A reader's app names a place when someone whose exact place it sees is there; nothing
+is sent for that.
+
+**A place in a direct message** (ADR 0121 §20): a direct message may carry field 42 with what the reader sees of the
+sender's place right now, instead of a packet of kind position of its own; over radio it goes along if the packet
+still fits, after the text and the answer reference. The reader takes it exactly like a packet of kind position with
+the time of the message, and only while the message is younger than a day. It is no part of the message: it is not
+shown with it and not kept with it, and the copy for the sender's own devices does not carry it. Never in a circle
+message: readers ignore field 42 there.
+
+**Position** (ADR 0121 §3–§5): what the sender's person shares of its place with the reader's person. It goes to
+every device of that person like a direct message and never into a circle space: the invitation link of a circle is
+its secret, so a place there could be read by anyone holding a forwarded link. Field 42:
+
+| Field | Name | Type | Meaning |
+|---|---|---|---|
+| 0 | level | uint | what the reader may expect: 0 off, 1 only when something is wrong, 2 the area all the time, 3 the point all the time. Every level includes the ones before. Unknown → drop the packet |
+| 1 | position | position | the place now, as in **Place**. Missing: nothing to show now |
+| 2 | radius | uint, m | with field 1: the person is somewhere within this distance of it, a fixed area (1…50 000). Readers show an area, never a point |
+| 3 | until | uint, s | the level ends then; missing = until changed |
+| 4 | ask | bool | the sender asks to be shown the reader's place. Such a packet says nothing about the sender's own place; readers answer only on a person's decision |
+| 5 | label | tstr | with field 1: the name the person gave the place it is at, e.g. "Zu Hause", at most 40 characters. Readers show it instead of a place name |
+| 6 | since | uint, s | with field 5: since when the person is there |
+
+The packet with the newer sender time (content field 1) replaces what the reader knew of that person. A sender on
+level 1 sends no field 1 here; its place goes along with a sign of life nobody confirmed (**Place**). An area is a
+fixed cell, not a point with random offset, which could be averaged out over many packets. A name (field 5) is the
+person's own word for a place; a reader shows it and does not notify anyone because of it. Entries with a place
+expire after a day at the latest. Over radio one packet goes to every device of the person, like a direct
+message; because the radio network is shared and slow, a sender sends a place for the same person at most every
+15 minutes, and at once only when the level or its end changed, for a request and for an answer to one. An area suits
+radio well: it changes seldom. Without room the accuracy stays behind. Vectors: `cbor.contentPosition`, `cbor.contentPositionArea`,
+`cbor.contentPositionAsk`, `cbor.contentPositionNamed`; for field 43 `cbor.contentSpot`, `cbor.contentSpotAll`.
+
+**Spot** (ADR 0121 §8): a circle or direct message may carry a place for everyone in the conversation (field 43),
+which apps show as a card that opens the map. Field 0 is the kind: 1 a meeting point (field 1 the place, field 2 an
+optional name of at most 60 characters), 2 the question where the reader is (no place), 3 the sender's place as the
+answer (field 1), 4 the invitation to everyone in the circle to share their place until field 3 (seconds since 1970;
+no place). Kind 4 shares nothing by itself: whoever agrees sends its place with the kind `position` to the members,
+limited to that time, and may stop at any time. Field 2 of the content carries a text for apps that do not know field 43. Readers ignore a spot of
+an unknown kind, a kind 1 or 3 without a plausible place and a kind 4 without field 3, and keep the message. A spot is one place at one time;
+a place that follows the sender is the kind `position`. Over radio the spot goes along if the packet has room, then
+with only the first line of the text; without room first the accuracy stays behind, then the name, then the spot,
+and the text alone goes as before.
+
+**Sos** (ADR 0083 §2–§4): a person calls its helpers. The packet goes into every circle the person chose (there also
+over radio) and, like a direct message, to every chosen person that is in none of them; it wakes. Field 44:
+
+| Field | Name | Type | Meaning |
+|---|---|---|---|
+| 0 | id | bstr 8 | names the call, random |
+| 1 | state | uint | 1 raised (the first packet and every update), 2 ended (the all-clear), 3 a helper looks after it. Unknown → drop the packet |
+| 2 | position | position | where the person is now |
+| 3 | battery | uint | battery in percent (0…100) |
+| 4 | trail | [* position] | where the phone was before, oldest first, at most 10 |
+| 5 | start | uint, s | when the call began |
+| 6 | plan | bstr 8 | the sign of life the call comes from (see **A call from a sign of life**); absent for a call raised by hand |
+
+Every packet of the person carries the whole state; the one with the newer sender time replaces what the reader knew.
+A call belongs to the person whose packet a reader saw first: packets with its ID from another person are dropped,
+except state 3. State 3 is sent by a helper with field 0 only, the way the call reached it (into the circle, or to
+the person), so that the other helpers there see who looks after it. An all-clear for a call the reader never saw is
+dropped. A call does not end by itself. Over radio the trail stays behind first, then battery, accuracy, start and plan; a call
+for a single person goes there as a direct radio packet to each of its devices.
+A sender gives the radio to a call before every waiting message, keeps it until the radio is there, and lets a
+`position` wait while a message waits. That order is local; no field of a packet carries it.
+Vector: `cbor.contentSos`.
+
+**A call from a sign of life** (ADR 0083 §5.4, ADR 0121 §22): when the alarm of a sign of life is due (`due` + `alarm`
+without a confirmation), it is a call for the helpers of that circle. Its ID is not random, so that everyone names
+the same call without having heard from each other:
+
+    id = SHA-256(`anmp/v1/alive-sos` ‖ plan (8 bytes) ‖ due (seconds, 8 bytes big-endian))[0..8]
+
+with `plan` and `due` of the last packet of the plan. One call has three sources, and a reader merges them by the ID:
+
+- **The helper itself.** When its own deadline says alarm (see **Alive**; not for a helper whose latest care is
+  "away"), it opens the call without any packet: owner the person of the plan, start `due` + `alarm`, with the place
+  and battery it knows of the plan. So the call also exists for a helper that hears nothing, e.g. only over radio.
+- **The phone**, if it still runs: at `due` + `alarm` it sends a packet of kind sos in state 1 into the circle of the
+  plan (there also over radio; for a plan for one person, to that person) with this ID and field 6, the place only if the person allowed it for the sign of
+  life, and updates it like every call. It sends none while a call the person raised by hand runs.
+- **The guard** (see **Guard**), if the phone is silent: the content the phone left at the relays carries the call
+  in field 44 next to field 35.
+
+A reader takes a packet with field 6 like every call, with these additions: if it knows the plan, the plan must
+belong to the sender's person, must not have ended on purpose (state 5) and must not have a confirmation (state 1–3)
+newer than the packet; a helper whose latest care for the plan is "away" drops it. It opens no second call while
+another call of the same person runs. The call ends with the all-clear (state 2) and, for every reader, with a newer
+packet of the plan in state 1, 2, 3 or 5: the person confirmed or ended on purpose. Reaching `until` (state 7) does
+not end it. For the person itself the all-clear of such a call is the confirmation of the sign of life: the phone
+sends the alive packet (state 2) and the sos packet in state 2. A helper that answers such a call (state 3) also
+sends a care "looking" for the plan, and a care "looking" for the plan counts as an answer to the call, so that
+readers that only know signs of life see who looks after it. Readers that do not know kind 31 or field 6 keep
+showing the alarm of the sign of life; apps that know it show the call instead, once, and show no hint before it.
+A reader woken by a packet with field 6 while its app does not run (a notification extension) applies the same
+checks and rings for the call; it does not ring for the packet in state 4 before it if that carries field 14.
+Vectors: `cbor.contentSosAlive`, `radio.aliveSos`.
 
 **Care** (ADR 0083 §4, §5.3): a member answers the sign of life `plan` of the same circle: 1 looking ("I'll check"),
 2 away ("I can't right now": no hint or alarm for this member), 3 back. Per person the newer answer wins; within
@@ -444,6 +622,8 @@ flowchart LR
 | stats key | Ed25519 seed = HKDF(private device key, `anmp/v1/stats\n` ‖ UTC day `YYYY-MM-DD`), see [Usage statistics](#usage-statistics-adr-0045) |
 | person marker | HKDF(private person key, `anmp/v1/stats-person\n` ‖ UTC day)[0..16] |
 | message ID | 8 random bytes |
+| space of a sign of life for one person | field 15 of the plan used like a circle secret: space, key and envelope key as for a circle, see **A sign of life for one person** |
+| call of a sign of life | SHA-256(`anmp/v1/alive-sos` ‖ plan ID ‖ `due` in seconds as 8 bytes big-endian)[0..8], see **A call from a sign of life** |
 | blob | random 32-byte key per blob; AEAD with AAD `anmp/v1/att`; ID = SHA-256(sealed bytes). The receiver checks the hash, then decrypts |
 
 **Old radio channels.** ANMP has no circle channels; all radio traffic runs on the channel `anynear` (ADR 0051).
@@ -526,7 +706,7 @@ The core (`kotlin/core`, package `app.anynear.anmp.core`) keeps ANMP packets and
   when forwarded from radio, have `until = 0` (no expiry). Their contents get `until` = now + 30 days, capped by the
   relay's `max_until`; such an entry carries no `refs`, a `hold` entry in the same space carries them with the
   contents' expiry. read, receipt, sync, subscribe, unsubscribe, channel-key, alive and care get now + 30 days
-  (capped) like their contents; want, have and history indexes 7 days. Revocations have `until = 0` (they must outlive the grant).
+  (capped) like their contents; the guard of a sign of life expires 7 days after its release (see Guard); want, have and history indexes 7 days. Revocations have `until = 0` (they must outlive the grant).
 - **Expired contents:** a reader that finds a content gone asks for it by its plaintext hash with `want` in the
   conversation (ADR 0014); a device that still has it puts it again as a new content and answers with `have` (7 days).
   This also serves new members and restored devices that read messages older than the contents.
@@ -1312,7 +1492,7 @@ clear by the owner (body bytes, signing bytes, signed map, seal key, packet; fix
 the record of a device address (token, derived space and key, record, sealed entry). For the radio way (ADR 0051, 0054)
 section `radio` also holds the radio rule, the accepted hours, a signed circle message and a direct message in the
 public form, the public form check, a sign of life and a helper's answer in the public form (`alivePacket` with the longest label
-that fits, `carePacket`), contents every reader rejects (`invalidContent`), the patron exchange with fixed one-time
+that fits, `aliveMissedPacket` with the place of the phone, `aliveGuard` with the content a phone leaves at the relays and its `ANDP-Not-Before`, `aliveSos` with the ID of the call of that plan and `due`, `aliveWatch` with a start for one person, the space of its field 15 and the scope of its guard, `carePacket`), contents every reader rejects (`invalidContent`), the patron exchange with fixed one-time
 keys (ask, patron, pickup, windows and the route tags they give), windows across an epoch border and packets every
 reader drops. Fixed nonces exist only for
 the vectors; real packets always use a random nonce. Section `stats` holds the stats key and person marker of a day,

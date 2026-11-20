@@ -562,6 +562,38 @@ func TestRadioAliveAndCare(t *testing.T) {
 		t.Errorf("radio.alivePacket.labelBytes: %d", label)
 	}
 
+	// The same plan after nobody confirmed, with the place of the phone (ADR 0121 §10).
+	missed := aliveOf(Str("Wandern"))
+	missed.State = AliveMissed
+	missed.Position = &Position{Lat: 501106, Lon: 86821, At: vectorTs + 1080, Acc: Int(12)}
+	mc := &Content{ID: unhex(t, "c0c1c2c3c4c5c6c7"), Ts: vectorTs + 1140, Alive: missed}
+	eq(t, "radio.aliveMissedPacket.content", v.hex(t, "radio.aliveMissedPacket.content"), must[[]byte](t)(EncodeContent(mc)))
+	mp := must[*Encoded](t)(encode(ah, mc, scope, f.circleKey, f.signA, nonce(0x12)))
+	eq(t, "radio.aliveMissedPacket.packet", v.hex(t, "radio.aliveMissedPacket.packet"), mp.Packet)
+	eq(t, "radio.aliveMissedPacket.opened", v.hex(t, "radio.aliveMissedPacket.opened"), mp.Opened)
+	if !IsPublicForm(mp.Packet) || int64(len(mp.Packet)) != v.int(t, "radio.aliveMissedPacket.size") {
+		t.Error("radio.aliveMissedPacket size or public form")
+	}
+	mm := must[*Message](t)(Decode(mp.Packet, scope, f.circleKey, WithKey(f.signA.Public().(ed25519.PublicKey)), true))
+	if a := mm.Content.Alive; a == nil || !a.Valid() || a.State != AliveMissed || a.Position == nil || !a.Position.Plausible() ||
+		a.Position.Lat != 501106 || a.Position.Lon != 86821 || a.Position.At != vectorTs+1080 || *a.Position.Acc != 12 {
+		t.Errorf("radio.aliveMissedPacket alive: %+v", mm.Content.Alive)
+	}
+	for _, p := range []*Position{{Lat: 900001, Lon: 0, At: 1}, {Lat: 0, Lon: -1800001, At: 1}, {Lat: 0, Lon: 0, At: 0}, {Lat: 0, Lon: 0, At: 1, Acc: Int(100001)}} {
+		if p.Plausible() {
+			t.Errorf("position out of range is plausible: %+v", p)
+		}
+	}
+	if !(&Position{Lat: -900000, Lon: -1800000, At: 1}).Plausible() {
+		t.Error("south pole at the date line is not plausible")
+	}
+
+	// The call a sign of life turns into (ADR 0083 §5.4) has an ID everyone computes alike.
+	eq(t, "radio.aliveSos.id", v.hex(t, "radio.aliveSos.id"), AliveSosID(v.hex(t, "radio.aliveSos.plan"), v.int(t, "radio.aliveSos.due")))
+	if bytes.Equal(AliveSosID(f.messageID, vectorTs+900), AliveSosID(f.messageID, vectorTs+901)) {
+		t.Error("the call of another due has the same ID")
+	}
+
 	ch := &Header{Kind: KindCare, From: bSender, Epoch: Int(3), Route: circleRoute}
 	cc := &Content{ID: unhex(t, "b0b1b2b3b4b5b6b7"), Ts: vectorTs + 60, Care: &Care{Plan: f.messageID, State: CareLooking}}
 	eq(t, "radio.carePacket.content", v.hex(t, "radio.carePacket.content"), must[[]byte](t)(EncodeContent(cc)))

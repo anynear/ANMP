@@ -112,6 +112,12 @@ sealed class CoreEvent {
     /** A call for the helpers changed (ADR 0083 §2): raised, updated, answered or ended; read it with [AnmpCore.sosCalls]. */
     class SosChanged(val id: String, val owner: String) : CoreEvent()
 
+    /** [person] asks us to be its contact for calls (ADR 0121 §25); read the open ones with [AnmpCore.sosAsks]. */
+    class SosAsked(val person: String, val circleId: String?) : CoreEvent()
+
+    /** Someone we asked answered, or we answered someone: [AnmpCore.sosContacts], [AnmpCore.sosAgreed]. */
+    class SosContactsChanged(val person: String) : CoreEvent()
+
     /**
      * A call for the helpers, found by the iOS notification extension ([AnmpCore.wakeFetch], ADR 0117): raised by hand,
      * or from a sign of life nobody confirmed ([plan], ADR 0083 §5.4). Only reported, not stored. Only calls that count:

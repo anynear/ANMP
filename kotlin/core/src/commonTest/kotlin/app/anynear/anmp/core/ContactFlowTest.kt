@@ -245,4 +245,32 @@ class ContactFlowTest {
         again.start()
         b.await<CoreEvent.Message>(20.seconds) { it.mid == out.mid }
     }
+
+    /**
+     * A circle grant newer than the contact grant must not shadow it: Anna leaves the circle (its grant is revoked) but
+     * stays Ben's contact, so Ben's next direct message still reaches her.
+     */
+    @Test
+    fun leavingASharedCircleKeepsDirectMessages() = world {
+        var shift = 0L
+        val anna = device("Anna", clock = CoreClock { Clock.System.now().toEpochMilliseconds() + shift })
+        val ben = device("Ben")
+        assertIs<AddContactResult.Added>(agreeContact(ben.core, anna.core))
+        eventually { anna.core.canWriteTo(ben.deviceId) && ben.core.canWriteTo(anna.deviceId) }
+        val first = assertNotNull(ben.core.sendDirect(anna.deviceId, "Hallo"))
+        anna.await<CoreEvent.Message> { it.mid == first.mid }
+
+        // The circle grant is issued seconds after the contact grant: the newer one.
+        shift = 5_000
+        val circle = anna.core.createCircle("Ausflug")
+        assertIs<JoinResult.Joined>(ben.core.joinCircle(anna.core.inviteLink(circle.id)!!))
+        eventually { ben.core.membersOf(circle.id).any { it.deviceId == anna.deviceId } }
+        anna.core.leaveCircle(circle.id)
+        ben.await<CoreEvent.MemberLeft> { it.circleId == circle.id && it.deviceId == anna.deviceId }
+        eventually { anna.core.undeliveredWrites() == 0 }
+
+        val after = assertNotNull(ben.core.sendDirect(anna.deviceId, "Noch da?"))
+        anna.await<CoreEvent.Message> { it.mid == after.mid }
+        assertTrue(ben.core.unreachable.value.isEmpty())
+    }
 }

@@ -6,7 +6,7 @@ import kotlin.test.assertEquals
 
 /**
  * Titles with the real model from `tools/doc-vectors/make.py` (ADR 0091), only if `DOC_VECTORS` names the file; the CI
- * has it not. All texts are made up.
+ * takes it from the app. All texts are made up.
  */
 class TitlesModelTest {
     private val model = System.getenv("DOC_VECTORS")?.let { File(it) }?.takeIf { it.exists() }?.let { DocVectors(it.readBytes()) }

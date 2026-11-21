@@ -219,9 +219,10 @@ class ContactFlowTest {
         val out = assertNotNull(a.core.sendCircle(circle.id, "nachreichen"))
         b.await<CoreEvent.Message> { it.mid == out.mid }
         a.core.stop()
-        holders[0].offline = false
+        // Checked while the holder is still offline: once it is back, Ben may put the entry there at any moment.
         val id = holders[1].entries(space).last().meta.id
         assertTrue(!holders[0].has(space, id))
+        holders[0].offline = false
         // Ben reaches the holder for reseedAfter without it delivering the entry: he puts it there, re-signed as owner.
         eventually(20.seconds) { holders[0].has(space, id) }
         assertEquals(space, holders[0].get(space, id)!!.meta.writer)

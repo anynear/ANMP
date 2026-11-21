@@ -300,6 +300,18 @@ class AnmpCoreWeb private constructor(private val core: AnmpCore, private val ho
     /** Does what is due for own signs of life; resolves to the next time (ms), 0 if nothing waits. */
     fun aliveTick(): Promise<Double> = GlobalScope.promise { core.aliveTick()?.toDouble() ?: 0.0 }
 
+    /** Persons that asked us to be their contact for calls and have no answer yet (ADR 0121 §25). */
+    fun sosAsks(): Array<SosAsk> = core.sosAsks().toTypedArray()
+
+    /** The persons we said yes to: only their calls may ring loudly. */
+    fun sosAgreed(): Array<String> = core.sosAgreed().toTypedArray()
+
+    /** Whom the own person asked to be a contact for its calls, and what they answered. */
+    fun sosContacts(): Array<SosContact> = core.sosContacts().toTypedArray()
+
+    /** The own answer to [person]: [agree] or not, also to take a yes back; every own device learns it. */
+    fun answerSosAsk(person: String, agree: Boolean): Promise<Boolean> = GlobalScope.promise { core.answerSosAsk(person, agree) }
+
     /** Own and subscribed channels (ADR 0062). */
     fun channels(): Array<ChannelState> = core.channels.value.toTypedArray()
 
@@ -431,6 +443,14 @@ class AnmpCoreWeb private constructor(private val core: AnmpCore, private val ho
     /** Resolves to the message ID, `null` without a grant for the recipient's mailbox. [id]: person or device ID. [replyTo], [replyFrom] as in [sendCircle]. */
     fun sendDirect(id: String, text: String, mid: String?, attachments: Array<PreparedAttachment>, replyTo: String?, replyFrom: String?, passedOn: Boolean): Promise<String?> =
         GlobalScope.promise { core.sendDirect(id, text, attachments.toList(), mid = mid, replyTo = replyTo, replyFrom = replyFrom, passedOn = passedOn)?.mid }
+
+    /**
+     * A message that is a card about places (ADR 0121 §26, §28) to the person [id]: [kind] as in `AnmpSpot`, [level]
+     * for asking to share each other's place and for its answer (0 for no; negative: none). [text] is what older apps
+     * show. Resolves to the message ID, `null` if nothing went out.
+     */
+    fun sendDirectSpot(id: String, text: String, mid: String?, kind: Int, level: Int): Promise<String?> =
+        GlobalScope.promise { core.sendDirect(id, text, mid = mid, spot = MessageSpot(kind, level = level.takeIf { it >= 0 }))?.mid }
 
     /** Reaction [emoji] (`""` withdraws it) on message [targetMid] of the installation with tag [targetTag] (ADR 0018). */
     fun react(conversation: Conversation, targetTag: String, targetMid: String, emoji: String): Promise<Boolean> =

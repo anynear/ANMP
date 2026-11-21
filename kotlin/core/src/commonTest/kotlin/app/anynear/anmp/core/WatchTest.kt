@@ -138,14 +138,17 @@ class WatchTest {
         a.await<CoreEvent.Message> { it.mid == inCircle.mid }
         b.core.stop()
         fun notified() = net.relays.sumOf { it.notifiedPuts.size }
+        // Only what lands in the circle space counts here: a wake-up of an earlier put can still arrive meanwhile.
+        val circleSpace = CircleKeys.of(a.core.circle(circle.id)!!.secret).space
+        fun notifiedInCircle() = net.relays.flatMap { it.notifiedPuts }.count { it.space == circleSpace }
 
         // In a circle the holders cannot tell whose message it is: no wake-up for everyone.
-        var before = notified()
+        val beforeCircle = notifiedInCircle()
         assertTrue(a.core.react(Conversation.Circle(circle.id), b.info.tag, inCircle.mid, "👍"))
-        assertEquals(before, notified())
+        assertEquals(beforeCircle, notifiedInCircle())
 
         // Directly on Ben's message: wakes Ben; the extension reads the reaction.
-        before = notified()
+        val before = notified()
         assertTrue(a.core.react(Conversation.Direct(b.info.personId), b.info.tag, out.mid, "❤️"))
         eventually { notified() > before }
         val nse = AnmpCore(scope, net.config(), AnmpPlatform(b.secrets, b.store, b.blobs, connector = net.connector))

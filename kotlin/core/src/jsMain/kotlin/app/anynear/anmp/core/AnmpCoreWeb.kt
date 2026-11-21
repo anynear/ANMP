@@ -300,6 +300,12 @@ class AnmpCoreWeb private constructor(private val core: AnmpCore, private val ho
     /** Does what is due for own signs of life; resolves to the next time (ms), 0 if nothing waits. */
     fun aliveTick(): Promise<Double> = GlobalScope.promise { core.aliveTick()?.toDouble() ?: 0.0 }
 
+    /**
+     * What the other persons share of their place with us (ADR 0121 §3), as last heard: the web app shows it for
+     * „Standort freigeben“ (§28), so that an existing sharing is recognized as in the app.
+     */
+    fun places(): Array<PersonPlace> = core.places().toTypedArray()
+
     /** Persons that asked us to be their contact for calls and have no answer yet (ADR 0121 §25). */
     fun sosAsks(): Array<SosAsk> = core.sosAsks().toTypedArray()
 

@@ -1790,7 +1790,7 @@ class AnmpCore(
             AnmpKind.SYNC -> {
                 c.keys?.let { k -> applyKeys(k, c.person) }
                 c.sync?.let { applySync(it) }
-                c.ownData?.takeIf { it.topic == PROFILE_TOPIC }?.let { cs.launch { runCatching { profileSync() } } }
+                c.ownData?.takeIf { it.topic == PROFILE_TOPIC }?.let { cs.launch { profileSyncUntilComplete() } }
                 c.ownData?.takeIf { it.topic != PROFILE_TOPIC && it.parts.size <= MAX_HISTORY_PARTS }?.let { d -> receiveOwnData(d, o.fromDevice) }
             }
             else -> Unit
@@ -3506,7 +3506,13 @@ class AnmpCore(
     // --- Calling the helpers (kind sos, ADR 0083 §2–§4) ------------------------------------------
 
     /** The own call and those of persons we help; ended ones stay for a day. */
-    fun sosCalls(): List<SosCall> = state.sos
+    fun sosCalls(): List<SosCall> = state.sos.map { c ->
+        // A call can arrive before the person of the sending device is known; it is stored under the device then and
+        // shown under the person as soon as that is known.
+        val owner = personOf(c.owner)
+        val caring = c.caring.map(::personOf).distinct()
+        if (owner == c.owner && caring == c.caring) c else c.copy(owner = owner, caring = caring)
+    }
 
     // --- Contacts for calls need a yes (ADR 0121 §25) ---------------------------------------------
 
@@ -3760,7 +3766,7 @@ class AnmpCore(
         val looking = AliveLogic.status(plan, false, ownPersonId, now()).looking.filter { it != plan.owner }
         val known = state.sos.firstOrNull { it.id == id }
         if (known != null) {
-            if (known.owner != plan.owner) return
+            if (personOf(known.owner) != plan.owner) return
             val next = known.copy(
                 caring = (known.caring + looking).distinct(),
                 plan = plan.id, reason = known.reason.takeIf { it != 0 } ?: reason, via = known.via ?: plan.circleId.takeIf { plan.peer == null },
@@ -3769,7 +3775,7 @@ class AnmpCore(
             if (next != known) putSos(next)
             return
         }
-        if (state.sos.any { it.owner == plan.owner && !it.ended }) return
+        if (state.sos.any { personOf(it.owner) == plan.owner && !it.ended }) return
         putSos(
             SosCall(
                 id, plan.owner, own = false, start = w?.start?.let { it * 1000 } ?: (plan.due + plan.alarm), lastAt = plan.lastAt,
@@ -3790,7 +3796,7 @@ class AnmpCore(
             if (plan.state in AnmpAliveState.START..AnmpAliveState.MOVING && plan.lastAt > at) return false
             if (plan.care.any { it.person == ownPersonId && it.state == AnmpCareState.AWAY }) return false
         }
-        return known != null || state.sos.none { it.owner == person && !it.ended }
+        return known != null || state.sos.none { personOf(it.owner) == person && !it.ended }
     }
 
     /** The person of [planId] confirmed or ended on purpose at [at]: the calls that came from the plan are over. */
@@ -3816,14 +3822,16 @@ class AnmpCore(
         val at = ts * 1000
         if (w.state >= AnmpSos.ASK) return onSosContact(person, circleId, at, w.state)
         val known = state.sos.firstOrNull { it.id == id }
+        // Stored before the person of the sending device was known: the device stands for its person.
+        val knownOwner = known?.owner?.let(::personOf)
         if (w.state == AnmpSos.CARING) {
             // An answer counts only for a call we know; whoever sees the call may answer.
-            if (known != null && person !in known.caring && person != known.owner) putSos(known.copy(caring = known.caring + person))
+            if (known != null && known.caring.none { personOf(it) == person } && person != knownOwner) putSos(known.copy(caring = known.caring + person))
             return
         }
         if (person == ownPersonId) return
         // A call belongs to the person whose packet we saw first; packets of others with its ID are dropped.
-        if (known != null && (known.owner != person || known.lastAt > at)) return
+        if (known != null && (knownOwner != person || known.lastAt > at)) return
         val planId = w.plan?.let { B64.encode(it) } ?: known?.plan
         if (w.state == AnmpSos.RAISED && !aliveCallCounts(person, planId, at, known)) return
         // An all-clear for a call we never saw is nothing to show.
@@ -6413,6 +6421,23 @@ class AnmpCore(
     /** Settings of the person as known here (name → bytes). */
     suspend fun settings(): Map<String, ByteArray> = onCore { state.profile.settings.associate { it.name to B64.decode(it.value) } }
 
+    /** The last [profileSync] could not read everything (no answer, or a picture not readable yet). */
+    private var profileIncomplete = false
+
+    /**
+     * [profileSync] after a notice of another own device, again a few times while something could not be read yet:
+     * the notice comes only once, and without another try a new picture waited for the next change of the profile.
+     */
+    private suspend fun profileSyncUntilComplete() {
+        var wait = timings.backoffMin
+        repeat(PROFILE_SYNC_TRIES) { i ->
+            runCatching { profileSync() }
+            if (!profileIncomplete || i == PROFILE_SYNC_TRIES - 1) return
+            delay(wait)
+            wait = minOf(wait * 2, timings.backoffMax)
+        }
+    }
+
     private fun profileChanged() {
         cs.launch { runCatching { if (profileSync()) sendOwnData(PROFILE_TOPIC, ByteArray(0)) } }
     }
@@ -6427,6 +6452,7 @@ class AnmpCore(
         if (revokedHere) return@onCore false
         val sp = profileSpace() ?: return@onCore false
         val read = sp.read()
+        profileIncomplete = !read.answered
         if (!read.answered) return@onCore false
         val entries = read.entries.values.mapNotNull { runCatching { coreCbor.decodeFromByteArray(ProfileEntry.serializer(), it) }.getOrNull() }
         val remoteName = entries.mapNotNull { it.name }.maxByOrNull { it.changed }
@@ -6442,7 +6468,8 @@ class AnmpCore(
         if (takeImage?.id != null) {
             val sealed = (transport.readContent(sp.space, ID(takeImage.id!!)) as? ReadResult.Found)?.fetched?.data
             imageBytes = sealed?.let { AnmpBlob.open(takeImage!!.key!!, takeImage!!.id!!, it) }?.takeIf { plainHash(it).contentEquals(takeImage!!.hash!!) }
-            if (imageBytes == null) takeImage = null else platform.blobs.write(OWN_IMAGE_SEALED, sealed!!)
+            // The picture can be listed before its content is readable on the relay we asked: try again shortly.
+            if (imageBytes == null) { takeImage = null; profileIncomplete = true } else platform.blobs.write(OWN_IMAGE_SEALED, sealed!!)
         }
         val known = p.settings.associateBy { it.name }
         val takeSettings = remoteSettings.filter { (k, v) -> known[k].let { it == null || (v.changed >= it.ts && B64.encode(v.data) != it.value) } }
@@ -6753,6 +6780,9 @@ class AnmpCore(
 
         /** Topic of the hint to the own other devices that the profile changed (ADR 0050). */
         const val PROFILE_TOPIC = "anmp/profile"
+
+        /** How often [profileSyncUntilComplete] tries, with growing pauses from [CoreTimings.backoffMin]. */
+        private const val PROFILE_SYNC_TRIES = 5
         private const val MAX_SEEN = 5_000
 
         /** Object IDs the notification extension already reported, so another holder does not report them again. */

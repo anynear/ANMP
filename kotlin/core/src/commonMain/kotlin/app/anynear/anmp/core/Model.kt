@@ -125,6 +125,8 @@ internal data class PeerGrant(
     val issued: Long,
     val personal: Boolean,
     val circleId: String? = null,
+    /** From the contact's own profile (its contact grant): preferred for direct writes over circle, channel or link grants. */
+    val contact: Boolean = false,
 )
 
 /** Own profile, sent with announcements: name, radio node, own picture ([imageHash], [imageTs] ms). */

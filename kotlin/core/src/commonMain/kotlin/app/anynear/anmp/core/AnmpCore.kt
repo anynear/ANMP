@@ -1289,11 +1289,15 @@ class AnmpCore(
 
     private suspend fun circleAccess(keys: CircleKeys) = SpaceAccess(keys.space, keys.owner, null, keys.anmp.envelope, keys.owner)
 
-    /** The best grant for writing into the mailbox [inbox]: a personal one first, then the newest. */
+    /**
+     * The best grant for writing into the mailbox [inbox]: a personal one first, then the contact grant from the owner's
+     * profile, then the newest. Circle, channel and link grants are revoked on their own (leaving a circle, withdrawing a
+     * link): a newer one of those must not shadow the contact grant, or direct messages fail with it.
+     */
     private fun grantOf(inbox: String): PeerGrant? {
         val now = nowS()
         return state.grants.filter { it.inbox == inbox && it.until > now + 60 }
-            .sortedWith(compareByDescending<PeerGrant> { it.personal }.thenByDescending { it.issued })
+            .sortedWith(compareByDescending<PeerGrant> { it.personal }.thenByDescending { it.contact }.thenByDescending { it.issued })
             .firstOrNull()
     }
 
@@ -1883,7 +1887,7 @@ class AnmpCore(
                 ),
             )
             if (!ok) return
-            c.grant?.let { acceptGrant(o.fromDevice, c.inbox, it, null) }
+            c.grant?.let { acceptGrant(o.fromDevice, c.inbox, it, null, contact = o.kind == AnmpKind.PROFILE) }
             if (isNew || !hasIssued(grantPurposeOf(o.fromDevice))) cs.launch { sendProfileTo(o.fromDevice) }
             adoptDevicesOf(person)
         }
@@ -2035,7 +2039,7 @@ class AnmpCore(
     }
 
     /** Takes a write grant for the mailbox [inbox] of [deviceId] after checking it. */
-    private suspend fun acceptGrant(deviceId: String, inbox: ByteArray?, raw: ByteArray, circleId: String?) {
+    private suspend fun acceptGrant(deviceId: String, inbox: ByteArray?, raw: ByteArray, circleId: String?, contact: Boolean = false) {
         if (inbox == null || inbox.size != 32) return
         val g = runCatching { Grant.decode(raw) }.getOrNull() ?: return
         val now = nowS()
@@ -2044,8 +2048,14 @@ class AnmpCore(
         if (b.grantee != null && b.grantee != me.writer.key) return
         if (runCatching { g.verifySig() }.isFailure) return
         val wire = g.toString()
-        if (state.grants.any { it.grant == wire }) return
-        val pg = PeerGrant(deviceId, b.space.toString(), wire, b.until, b.issued, personal = b.grantee != null, circleId = circleId)
+        if (state.grants.any { it.grant == wire }) {
+            // Known already, e.g. from before grants were marked: a profile marks it as the contact grant now.
+            if (contact && state.grants.any { it.grant == wire && !it.contact }) {
+                update { s -> s.copy(grants = s.grants.map { if (it.grant == wire) it.copy(contact = true) else it }) }
+            }
+            return
+        }
+        val pg = PeerGrant(deviceId, b.space.toString(), wire, b.until, b.issued, personal = b.grantee != null, circleId = circleId, contact = contact)
         update { s ->
             // A newer circle grant replaces the older one of the same circle; personal grants are kept until they expire.
             val rest = s.grants.filterNot { it.deviceId == deviceId && it.until <= now || (circleId != null && it.deviceId == deviceId && it.circleId == circleId && it.issued <= pg.issued) }
@@ -2059,6 +2069,7 @@ class AnmpCore(
         if (due.isEmpty()) return
         update { s -> s.copy(issued = s.issued.map { if (it in due) it.copy(revoked = true) else it }) }
         for (g in due) {
+            log.log("revoke grant ${g.purpose.substringBefore(':')} ${g.hash.take(8)}")
             val hash = app.anynear.andp.Hash.parse(g.hash)
             transport.submit(me.inbox, Meta.revocationData(hash), until = 0, revokes = hash.toString(), known = ownAccess())
         }
@@ -3040,9 +3051,18 @@ class AnmpCore(
         // (say from its contact link) does not count: removed stays removed.
         val refused = state.grants.filter { g -> g.inbox == space && grant != null && runCatching { Grant.parse(g.grant).hash.toString() }.getOrNull() == grant }
         val since = refused.maxOfOrNull { it.issued }
-        if (since != null && state.grants.any { it.inbox == space && it !in refused && it.issued > since && it.until > nowS() + 60 }) {
+        val usable = state.grants.filter { it.inbox == space && it !in refused && it.until > nowS() + 60 }
+        if (since != null && usable.any { it.issued > since }) {
             update { s -> s.copy(grants = s.grants.filterNot { it in refused }) }
             log.log("mailbox ${space.take(8)} refuses a revoked grant, trying the newer one")
+            return true
+        }
+        // A revoked circle, channel or link grant while the contact grant is still there (the owner left a circle or
+        // withdrew a link, it did not remove us): drop it and write with the contact grant. A removal revokes the
+        // contact grant too, so it then ends below as before.
+        if (refused.isNotEmpty() && refused.none { it.contact } && usable.any { it.contact }) {
+            update { s -> s.copy(grants = s.grants.filterNot { it in refused }) }
+            log.log("mailbox ${space.take(8)} refuses a revoked grant, trying the contact grant")
             return true
         }
         val own = ownPersonId

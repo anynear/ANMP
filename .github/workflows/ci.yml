@@ -28,6 +28,10 @@ jobs:
     defaults:
       run:
         working-directory: ANMP/kotlin
+    env:
+      # The model tests (DocVectorsModelTest, TitlesModelTest) use the meaning model the app ships (ADR 0078); without
+      # the file they are skipped.
+      DOC_VECTORS: ${{ github.workspace }}/App/shared/src/commonMain/composeResources/files/doc-vectors.bin
     steps:
       - uses: actions/checkout@v5
         with:
@@ -38,13 +42,21 @@ jobs:
         with:
           app-id: ${{ secrets.CI_APP_ID }}
           private-key: ${{ secrets.CI_APP_KEY }}
-          repositories: ${{ vars.ANDP_REPO || 'ANDP' }}
+          repositories: ${{ vars.ANDP_REPO || 'ANDP' }},${{ vars.APP_REPO || 'App' }}
           permission-contents: read
       - uses: actions/checkout@v5
         with:
           repository: anynear/${{ vars.ANDP_REPO || 'ANDP' }}
           token: ${{ steps.ci-token.outputs.token || github.token }}
           path: ANDP
+      # Only the meaning model of the app (15 MB), not the whole repository.
+      - uses: actions/checkout@v5
+        with:
+          repository: anynear/${{ vars.APP_REPO || 'App' }}
+          token: ${{ steps.ci-token.outputs.token || github.token }}
+          path: App
+          sparse-checkout: shared/src/commonMain/composeResources/files/doc-vectors.bin
+          sparse-checkout-cone-mode: false
       - uses: actions/setup-java@v5
         with:
           distribution: temurin

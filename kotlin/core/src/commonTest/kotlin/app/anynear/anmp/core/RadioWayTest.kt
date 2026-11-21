@@ -175,6 +175,8 @@ class RadioWayTest {
         a.core.removeMember(circle.id, b.deviceId)
         b.await<CoreEvent.KeyChanged>(30.seconds) { it.kind == CoreEvent.KIND_REMOVED_YOU }
         eventually { c.core.membersOf(circle.id).none { it.deviceId == b.deviceId } }
+        // Anna's own list must be through as well, else she still knows Ben as a member when the packet comes.
+        eventually { a.core.membersOf(circle.id).none { it.deviceId == b.deviceId } }
         val air = FakeAir()
         a.radio(air)
         b.radio(air)

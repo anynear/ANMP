@@ -6,8 +6,8 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 
 /**
- * The real model from `tools/doc-vectors/make.py` (ADR 0078 §5), only if `DOC_VECTORS` names the file; the CI has it
- * not. Checks the measured cases: what the meaning adds to the search and to the recognition. All texts are made up.
+ * The real model from `tools/doc-vectors/make.py` (ADR 0078 §5), only if `DOC_VECTORS` names the file; the CI takes
+ * it from the app. Checks the measured cases: what the meaning adds to the search and to the recognition. All texts are made up.
  */
 class DocVectorsModelTest {
     private val model = System.getenv("DOC_VECTORS")?.let { File(it) }?.takeIf { it.exists() }?.let { DocVectors(it.readBytes()) }
@@ -33,6 +33,7 @@ class DocVectorsModelTest {
 
         fun kind(text: String) = DocRecognizer.recognizeWith("scan.pdf", text, false, m).kind
         assertEquals(DocKind.ID, kind("Die Bundesrepublik bestätigt die Identität der Inhaberin. Staatsangehörigkeit deutsch, Geburtsort Beispielstadt, gültig bis 2031"))
+        // The model alone gets this letter only to 0.21 (needs 0.40); the rules know it since RULES 4.
         assertEquals(DocKind.HEALTH, kind("Sehr geehrte Frau Kollegin, wir berichten über Ihre Patientin, die vom 2. bis 9. März bei uns stationär behandelt wurde."))
         // Close to an insurance, but not close enough: the model only adds what is clear (measured 0.38).
         assertEquals(DocKind.OTHER, kind("Kfz-Haftpflicht Nr. 12345 für Ihr Fahrzeug, jährlicher Beitrag, Selbstbeteiligung bei Schaden, Kennzeichen"))

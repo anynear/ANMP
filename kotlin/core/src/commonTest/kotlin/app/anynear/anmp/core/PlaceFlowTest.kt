@@ -50,10 +50,12 @@ class PlaceFlowTest {
         assertTrue(a.core.sharePlace(b.info.personId, AnmpPlace.EXACT, point, label = "Zu Hause", sinceMillis = now - 3_600_000L))
         eventually { b.core.places().single().label == "Zu Hause" }
         assertEquals((now - 3_600_000L) / 1000, b.core.places().single().since / 1000)
-        // A name without a place is nothing: it is left out.
-        assertTrue(a.core.sharePlace(b.info.personId, AnmpPlace.EXACT, null, label = "Zu Hause"))
-        eventually { b.core.places().single().position == null }
-        assertNull(b.core.places().single().label)
+        // The phone could not locate itself and repeats only the level: the last point stays, with its name.
+        val before = b.core.places().single()
+        assertTrue(a.core.sharePlace(b.info.personId, AnmpPlace.EXACT, null, label = "Zu Hause", untilMillis = now + 7_200_000L))
+        eventually { b.core.places().single().until / 1000 == (now + 7_200_000L) / 1000 }
+        assertEquals(before.position, b.core.places().single().position)
+        assertEquals("Zu Hause", b.core.places().single().label)
         // With a direct message instead of a packet of its own: the reader takes it the same way.
         val later = AlivePosition(50.2, 8.7, at = CoreClock.SYSTEM.nowMillis(), accuracy = 10)
         assertNotNull(a.core.sendDirect(b.info.personId, "Bin gleich da", place = PlaceShare(AnmpPlace.EXACT, later)))
@@ -205,6 +207,26 @@ class PlaceFlowTest {
         assertTrue(a.core.answerSosAsk(b.info.personId, true))
         eventually { a.core.sosAgreed() == listOf(b.info.personId) }
         assertTrue(b.core.sosContacts().isEmpty())
+    }
+
+    @Test
+    fun anAnswerOnOneOwnDeviceHoldsOnTheOthers() = world {
+        val (a, b, _) = three()
+        val tablet = addTablet(b)
+        val circle = a.core.circles.value.single()
+        eventually { a.core.membersOf(circle.id).any { it.deviceId == tablet.deviceId } }
+        assertTrue(a.core.askSosContacts(emptyList(), listOf(b.info.personId)))
+        eventually { b.core.sosAsks().any { it.person == a.info.personId } && tablet.core.sosAsks().any { it.person == a.info.personId } }
+
+        // Ben says yes in the browser: his phone rings for Anna from now on, and the question is gone there.
+        assertTrue(tablet.core.answerSosAsk(a.info.personId, true))
+        eventually { b.core.profileSync(); b.core.sosAgreed() == listOf(a.info.personId) }
+        assertTrue(b.core.sosAsks().isEmpty())
+        eventually { a.core.sosContacts().firstOrNull { it.person == b.info.personId }?.state == SosContact.AGREED }
+
+        // He takes it back on the phone: the browser knows, too.
+        assertTrue(b.core.answerSosAsk(a.info.personId, false))
+        eventually { tablet.core.profileSync(); tablet.core.sosAgreed().isEmpty() }
     }
 
     @Test

@@ -145,3 +145,20 @@ data class SosCall(
         plan?.takeIf { state != AnmpSos.CARING }?.let { B64.decode(it) },
     )
 }
+
+/** An own answer to a person that asked us to be its contact for calls ([agree]), and when ([at], ms). */
+@Serializable
+internal data class SosAnswer(val agree: Boolean, val at: Long)
+
+/**
+ * What is kept of a person's place when a new message comes. A phone that could not locate itself (at night in the
+ * background, without the permission to locate always, with the battery saver) still repeats its level, but without a
+ * point. The last known point then stays, with its own time, its name and its area, until the person really changes
+ * the level; only a different level ends it.
+ */
+object PlaceKeeping {
+    fun merge(known: PersonPlace?, told: PersonPlace): PersonPlace {
+        if (told.position != null || known?.position == null || known.level != told.level) return told
+        return told.copy(position = known.position, radius = known.radius, label = known.label, since = known.since)
+    }
+}

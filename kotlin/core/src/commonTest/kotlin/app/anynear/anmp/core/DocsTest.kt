@@ -52,6 +52,10 @@ class DocRecognizerTest {
         assertEquals(DocKind.CERTIFICATE, kind("IMG_7.jpg", "Geburtsurkunde\nStandesamt Beispielhausen\nGeboren am 14.05.2019", image = true))
         assertEquals(DocKind.HEALTH, kind("IMG_8.jpg", "Internationale Bescheinigungen über Impfungen\nImpfpass\nImpfstoff Charge 1234", image = true))
         assertEquals(DocKind.HEALTH, kind("brief.pdf", "Praxis Dr. med. Beispiel\nArztbrief\nDiagnose: Beispielbefund"))
+        // A letter about a stay in hospital without the word „Arztbrief“ (measured in DocVectorsModelTest: the model alone is too unsure).
+        assertEquals(DocKind.HEALTH, kind("scan.pdf", "Sehr geehrte Frau Kollegin, wir berichten über Ihre Patientin, die vom 2. bis 9. März bei uns stationär behandelt wurde."))
+        // „stationär“ alone is not enough: a radio set up for a fixed place stays without a kind.
+        assertEquals(DocKind.OTHER, kind("anleitung.pdf", "Funkgerät stationär im WLAN betreiben: Netzteil anschließen und die App öffnen."))
         assertEquals(DocKind.PROVISION, kind("scan.pdf", "Vorsorgevollmacht\nHiermit erteile ich Vollmacht an die bevollmächtigte Person"))
         assertEquals(DocKind.PROVISION, kind("Patientenverfügung.pdf", ""))
         assertEquals(DocKind.INSURANCE, kind("brief.pdf", "Beispiel Versicherung AG\nVersicherungsschein\nVersicherungsnehmer: Erika Beispiel"))

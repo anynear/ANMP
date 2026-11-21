@@ -124,6 +124,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.builtins.ByteArraySerializer
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.cbor.CborLabel
@@ -3553,8 +3554,44 @@ class AnmpCore(
         val c = content(id = Anmp.newMessageId(), sos = AnmpSos(Anmp.newMessageId(), if (agree) AnmpSos.AGREE else AnmpSos.REFUSE), ts = nowS())
         if (!postPerson(to, AnmpKind.SOS, c)) return false
         update { s -> s.copy(sosAgreed = if (agree) (s.sosAgreed + to).distinct() else s.sosAgreed - to, sosAsks = s.sosAsks.filter { it.person != to }) }
+        keepSosAnswer(to, agree)
         emit(CoreEvent.SosContactsChanged(to))
         return true
+    }
+
+    /**
+     * The own answers, as every own device should know them: a phone must ring for a person the browser said yes to,
+     * and a question answered on one device is no longer open on the others. They go to the profile space as a
+     * setting of the core ([SOS_ANSWERS]); [profileSync] takes them on the other devices ([takeSosAnswers]).
+     */
+    private fun sosAnswers(): Map<String, SosAnswer> =
+        state.profile.settings.firstOrNull { it.name == SOS_ANSWERS }?.let { st ->
+            runCatching { coreJson.decodeFromString(SOS_ANSWERS_SERIALIZER, B64.decode(st.value).decodeToString()) }.getOrNull()
+        }.orEmpty()
+
+    private suspend fun keepSosAnswer(person: String, agree: Boolean) {
+        val t = now()
+        val next = (sosAnswers() + (person to SosAnswer(agree, t))).entries.sortedBy { it.value.at }.takeLast(SOS_ANSWERS_MAX).associate { it.key to it.value }
+        val value = B64.encode(coreJson.encodeToString(SOS_ANSWERS_SERIALIZER, next).encodeToByteArray())
+        update { s -> s.copy(profile = s.profile.copy(settings = s.profile.settings.filterNot { it.name == SOS_ANSWERS } + SharedSetting(SOS_ANSWERS, value, t))) }
+        profileChanged()
+    }
+
+    /** Answers another own device gave (see [keepSosAnswer]): the same yes and no here, and their questions answered. */
+    private suspend fun takeSosAnswers() {
+        val answers = sosAnswers()
+        if (answers.isEmpty()) return
+        val before = state
+        update { s ->
+            s.copy(
+                sosAgreed = (s.sosAgreed.filter { answers[it]?.agree != false } + answers.filter { it.value.agree }.keys).distinct(),
+                sosAsks = s.sosAsks.filter { a -> answers[a.person].let { it == null || it.at < a.at } },
+            )
+        }
+        val agreedBefore = before.sosAgreed.toSet()
+        val agreedNow = state.sosAgreed.toSet()
+        val changed = (agreedBefore - agreedNow) + (agreedNow - agreedBefore) + (before.sosAsks.map { it.person }.toSet() - state.sosAsks.map { it.person }.toSet())
+        changed.forEach { emit(CoreEvent.SosContactsChanged(it)) }
     }
 
     /** No longer a contact of ours, e.g. taken out of the list: forgotten here; its yes for our calls is not needed any more. */
@@ -3845,7 +3882,8 @@ class AnmpCore(
         }
         val known = state.places.firstOrNull { it.person == person }
         if (known != null && known.at > at) return
-        val next = PersonPlace(person, p.level, AlivePosition.of(p.position), p.radius, (p.until ?: 0) * 1000, at, p.label, (p.since ?: 0) * 1000)
+        val told = PersonPlace(person, p.level, AlivePosition.of(p.position), p.radius, (p.until ?: 0) * 1000, at, p.label, (p.since ?: 0) * 1000)
+        val next = PlaceKeeping.merge(known, told)
         if (next == known) return
         update { s -> s.copy(places = s.places.filter { it.person != person } + next) }
         emit(CoreEvent.PlaceChanged(person))
@@ -6400,6 +6438,7 @@ class AnmpCore(
                 s.copy(profile = q)
             }
             emit(CoreEvent.ProfileChanged(takeName?.data?.decodeToString(), takeImage != null, imageBytes, takeSettings.mapValues { it.value.data }))
+            if (SOS_ANSWERS in takeSettings) takeSosAnswers()
             // A picture from another own device also goes to this device's contacts.
             if (takeImage != null) sendProfileToContacts()
         }
@@ -6718,6 +6757,11 @@ class AnmpCore(
         private val PLACE_LIFETIME = 1.days
         private const val SOS_MIDS = 30
         private const val SOS_ASKS_MAX = 50
+
+        /** Setting of the core in the profile space: the own answers to contacts for calls (ADR 0121 §25). */
+        internal const val SOS_ANSWERS = "anmp:sos.answers"
+        private const val SOS_ANSWERS_MAX = 200
+        private val SOS_ANSWERS_SERIALIZER = MapSerializer(String.serializer(), SosAnswer.serializer())
 
         /** Someone asked to be a contact for calls who did not answer is asked again after this long. */
         internal const val SOS_REASK_MILLIS = 24 * 3_600_000L

@@ -133,8 +133,11 @@ internal class StoreAmount(
  */
 @JsExport
 object DocRecognizer {
-    /** Version of the rules; a higher one recognizes files again whose [DocInfo.byPerson] is false. 2: ADR 0074. */
-    const val RULES = 3
+    /**
+     * Version of the rules; a higher one recognizes files again whose [DocInfo.byPerson] is false. 2: ADR 0074.
+     * 4: letters about a stay in hospital („Patientin … stationär behandelt“) are health.
+     */
+    const val RULES = 4
 
     /** At most this many characters of text are read per file (ADR 0067 §3). */
     const val MAX_TEXT = 20_000
@@ -175,7 +178,8 @@ object DocRecognizer {
             3, "arztbrief", "befund", "diagnose", "arbeitsunfaehigkeit", "impfpass", "impfausweis", "impfnachweis",
             "impfbescheinigung", "krankenhaus", "entlassungsbericht", "mutterpass", "allergiepass", "organspendeausweis",
             "medikationsplan", "vaccination", "medical report", "prescription",
-        ) + w(2, "rezept", "e-rezept") + w(1, "krankenkasse", "praxis", "patient", "klinik", "dr. med", "medikament", "behandlung", "versichertennummer", "impfung", "impfstoff"),
+        ) + w(2, "rezept", "e-rezept", "stationär") +
+            w(1, "krankenkasse", "praxis", "patient", "klinik", "dr. med", "medikament", "behandlung", "versichertennummer", "impfung", "impfstoff", "entlassung"),
         DocKind.CERTIFICATE to w(
             3, "urkunde", "geburtsurkunde", "heiratsurkunde", "sterbeurkunde", "lebenspartnerschaftsurkunde", "erbschein",
             "standesamt", "zeugnis", "zertifikat", "certificate", "diploma", "birth certificate", "death certificate",

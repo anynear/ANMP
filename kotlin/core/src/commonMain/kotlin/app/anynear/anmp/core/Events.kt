@@ -118,6 +118,9 @@ sealed class CoreEvent {
     /** Someone we asked answered, or we answered someone: [AnmpCore.sosContacts], [AnmpCore.sosAgreed]. */
     class SosContactsChanged(val person: String) : CoreEvent()
 
+    /** The sharing of the place with [person] changed (ADR 0123 §2): asked, answered, withdrawn or ended; [AnmpCore.sharings]. */
+    class SharingChanged(val person: String) : CoreEvent()
+
     /**
      * A call for the helpers, found by the iOS notification extension ([AnmpCore.wakeFetch], ADR 0117): raised by hand,
      * or from a sign of life nobody confirmed ([plan], ADR 0083 §5.4). Only reported, not stored. Only calls that count:

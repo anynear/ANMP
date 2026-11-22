@@ -402,7 +402,7 @@ class AnmpSos(
     @CborLabel(6) val plan: ByteArray? = null,
 ) {
     val plausible: Boolean
-        get() = id.size == 8 && state in RAISED..REFUSE && (battery == null || battery in 0..100) &&
+        get() = id.size == 8 && state in RAISED..DROPPED && (battery == null || battery in 0..100) &&
             (trail == null || trail.size <= MAX_TRAIL) && (start == null || start > 0) && (plan == null || plan.size == 8)
 
     companion object {
@@ -418,6 +418,9 @@ class AnmpSos(
         const val ASK = 4
         const val AGREE = 5
         const val REFUSE = 6
+
+        /** The asker no longer counts the reader as its contact for calls (ADR 0123 §3); sent to the reader alone. */
+        const val DROPPED = 7
         const val MAX_TRAIL = 10
 
         /**
@@ -455,6 +458,7 @@ class AnmpSpot(
             MEET, HERE, ARRIVED -> position?.plausible == true
             SHARE -> level == AnmpPlace.AREA || level == AnmpPlace.EXACT
             SHARED -> level == AnmpPlace.OFF || level == AnmpPlace.AREA || level == AnmpPlace.EXACT
+            ENDED, WITHDRAWN -> true
             ASK -> true
             ALL -> until != null && until > 0
             else -> false
@@ -472,13 +476,22 @@ class AnmpSpot(
         const val ARRIVED = 5
 
         /**
-         * The sender asks the reader that both see each other's place for good, at [level] (ADR 0121 §28). The sender
-         * shows its own place at that level from then on; the reader decides.
+         * „Standort freigeben“ (ADR 0123 §2): the sender asks the reader that both see each other's place for good, at
+         * [level]. Nothing goes out before the yes; then both show each other that level.
          */
         const val SHARE = 6
 
-        /** The answer to [SHARE]: [level] is what the sender of the answer now shows, 0 for no. */
+        /**
+         * The answer to [SHARE]: [level] the level asked for as a yes, 0 for no. Older apps also sent it without a question
+         * to lower or end what both agreed on; a reader takes that as the new level, 0 as the end.
+         */
         const val SHARED = 7
+
+        /** The sender ends the sharing with the reader, for both (ADR 0123 §2); also an open question. */
+        const val ENDED = 8
+
+        /** The sender withdraws its own open question [SHARE] (ADR 0123 §1). */
+        const val WITHDRAWN = 9
         const val MAX_LABEL = 60
     }
 }

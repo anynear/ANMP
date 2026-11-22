@@ -306,6 +306,19 @@ class AnmpCoreWeb private constructor(private val core: AnmpCore, private val ho
      */
     fun places(): Array<PersonPlace> = core.places().toTypedArray()
 
+    /** „Standort freigeben“ (ADR 0123 §2): the sharings that hold or wait for an answer. */
+    fun sharings(): Array<PlaceSharing> = core.sharings().toTypedArray()
+
+    /** A sharing the browser kept itself before the core knew it (ADR 0123 §9); only if the core knows none. */
+    fun adoptSharing(person: String, level: Int, asked: Int): Promise<Boolean> = GlobalScope.promise { core.adoptSharing(person, level, asked) }
+
+    /** Asks the members of [circleIds] and the persons [personIds] to be contacts for the own calls (ADR 0121 §25). */
+    fun askSosContacts(circleIds: Array<String>, personIds: Array<String>, except: Array<String>): Promise<Boolean> =
+        GlobalScope.promise { core.askSosContacts(circleIds.toList(), personIds.toList(), except = except.toList()) }
+
+    /** The own person no longer counts [person] as its contact for calls (ADR 0123 §3). */
+    fun endSosContact(person: String): Promise<Boolean> = GlobalScope.promise { core.endSosContact(person) }
+
     /** Persons that asked us to be their contact for calls and have no answer yet (ADR 0121 §25). */
     fun sosAsks(): Array<SosAsk> = core.sosAsks().toTypedArray()
 

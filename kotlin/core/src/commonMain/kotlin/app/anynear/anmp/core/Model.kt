@@ -230,6 +230,8 @@ internal data class CoreState(
     val sosContacts: List<SosContact> = emptyList(),
     val sosAsks: List<SosAsk> = emptyList(),
     val sosAgreed: List<String> = emptyList(),
+    /** „Standort freigeben“ (ADR 0123 §2), one entry per person, from the cards in the direct messages. */
+    val sharings: List<PlaceSharing> = emptyList(),
     /** Persons whose mailbox refuses us (every holder 403), with since when (ms): person ID → time (ADR 0046). */
     val unreachable: Map<String, Long> = emptyMap(),
     /** Persons asking to become a contact (ADR 0116), not yet answered. */

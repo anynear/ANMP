@@ -390,12 +390,17 @@ optional name of at most 60 characters), 2 the question where the reader is (no 
 answer (field 1), 4 the invitation to everyone in the circle to share their place until field 3 (seconds since 1970;
 no place), 5 that the sender arrived where it was going (field 1 the place, field 2 an optional name; ADR 0121
 §26), 6 the question whether both show each other their place for good (field 4 the level, 2 or 3 as in the kind
-`position`; the sender shows its own place at that level from then on; ADR 0121 §28), 7 the answer to it (field 4 the
-level the answering person now shows, 0 for no; after a no the asker takes back what it showed for the question).
-Kind 7 is also sent later, without a question before it, by whoever lowers or ends what it shows of what both agreed
-on; the reader then shows at most the same. A kind 7 never makes a reader show more than it does. Kind 4 shares nothing by itself: whoever agrees sends its place with the kind `position` to the members,
+`position`; nothing goes out before the yes; ADR 0123 §2), 7 the answer to it (field 4 the level asked for as a yes,
+0 for no), 8 that the sender ends the sharing for both, an open question with it, and 9 that the sender withdraws its
+own open question (no fields besides 0). After a yes both show each other the level asked for, or the lower one if
+the answer names less. If both ask before either answers, the lower level counts as agreed. Another level is a new
+question; the sharing that holds stays until the new one is agreed. Older apps sent kind 7 also later without a
+question before it, to lower or end what both agreed on: a reader takes it as the new level, 0 as the end. A kind 7
+never makes a reader show more than it does. Every device of both persons keeps the state from these cards in the
+order of their sender time (field 4 of the content, whole seconds), from the internet and from radio alike, so that
+the same card on both ways is one step; the own copies of a direct message carry them to the own devices. Kind 4 shares nothing by itself: whoever agrees sends its place with the kind `position` to the members,
 limited to that time, and may stop at any time. Field 2 of the content carries a text for apps that do not know field 43. Readers ignore a spot of
-an unknown kind, a kind 1, 3 or 5 without a plausible place, a kind 6 or 7 without a level it knows and a kind 4 without field 3, and keep the message. A spot is one place at one time;
+an unknown kind, a kind 1, 3 or 5 without a plausible place, a kind 6 or 7 without a level it knows and a kind 4 without field 3, and keep the message; older apps ignore kinds 8 and 9 that way and show the text. A spot is one place at one time;
 a place that follows the sender is the kind `position`. Over radio the spot goes along if the packet has room, then
 with only the first line of the text; without room first the accuracy stays behind, then the name, then the spot,
 and the text alone goes as before.
@@ -406,7 +411,7 @@ over radio) and, like a direct message, to every chosen person that is in none o
 | Field | Name | Type | Meaning |
 |---|---|---|---|
 | 0 | id | bstr 8 | names the call, random |
-| 1 | state | uint | 1 raised (the first packet and every update), 2 ended (the all-clear), 3 a helper looks after it; 4 to 6 see **Contacts for calls**. Unknown → drop the packet |
+| 1 | state | uint | 1 raised (the first packet and every update), 2 ended (the all-clear), 3 a helper looks after it; 4 to 7 see **Contacts for calls**. Unknown → drop the packet |
 | 2 | position | position | where the person is now |
 | 3 | battery | uint | battery in percent (0…100) |
 | 4 | trail | [* position] | where the phone was before, oldest first, at most 10 |
@@ -426,7 +431,8 @@ Vector: `cbor.contentSos`.
 **Contacts for calls** (ADR 0121 §25): being someone's contact needs a yes, once, so that nobody can make other
 people's phones ring. State 4 asks: sent into a circle or to a person like a call, with field 0 only (a random ID);
 it wakes like a message. State 5 (yes) and 6 (no) answer it and go to the asker alone, never into a circle; a later 6
-takes a yes back. A reader that said yes before answers a new question with 5 by itself. A question without
+takes a yes back. State 7 goes from the asker to the reader alone: the asker no longer counts it as a contact (ADR
+0123 §3); the reader forgets the question and its yes, as after its own 6. A reader that said yes before answers a new question with 5 by itself. A question without
 an answer is sent again after a day, not sooner: a reader that did not know state 4 yet dropped it. An answer counts only from
 someone the reader asked. The check is the reader's: a call (state 1) from a person the reader did not say yes to is
 shown, but must not ring loudly. That holds for calls from a sign of life as well. Apps that do not know these states

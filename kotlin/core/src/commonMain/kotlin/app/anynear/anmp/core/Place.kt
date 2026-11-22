@@ -102,6 +102,61 @@ data class SosContact(val person: String, val state: Int, val at: Long) {
     }
 }
 
+/**
+ * „Standort freigeben“ between the own person and [person] (ADR 0123 §2): [level] what both show each other
+ * ([AnmpPlace.AREA] or [AnmpPlace.EXACT]), 0 for none, agreed [since] (ms). [asked] is an open question at that
+ * level, 0 for none, by the own person if [askedByUs], sent at [askedAt] (ms). Every own device keeps it from the
+ * cards in the direct messages ([AnmpSpot.SHARE] to [AnmpSpot.WITHDRAWN]); [at], [lastKind] and [lastByUs] name the
+ * last card taken, so that one read twice or an older one changes nothing.
+ */
+@JsExport
+@Serializable
+data class PlaceSharing(
+    val person: String,
+    val level: Int = 0,
+    val since: Long = 0,
+    val asked: Int = 0,
+    val askedByUs: Boolean = false,
+    val askedAt: Long = 0,
+    val at: Long = 0,
+    val lastKind: Int = 0,
+    val lastByUs: Boolean = false,
+) {
+    /** Both show each other [level]. */
+    val active: Boolean get() = level > 0
+
+    /** A question waits for its answer. */
+    val open: Boolean get() = asked > 0
+
+    /** The card of [kind] with [level] (field 4), sent at [at] (ms), by the own person if [byUs]. */
+    internal fun take(byUs: Boolean, kind: Int, level: Int?, at: Long): PlaceSharing {
+        if (at < this.at || (at == this.at && kind == lastKind && byUs == lastByUs)) return this
+        val l = level ?: 0
+        val answers = asked > 0 && askedByUs != byUs
+        val none = copy(asked = 0, askedByUs = false, askedAt = 0)
+        val next = when (kind) {
+            AnmpSpot.SHARE -> when {
+                l != AnmpPlace.AREA && l != AnmpPlace.EXACT -> return this
+                // Both asked before either answered: the lower level is what both want.
+                answers -> none.copy(level = minOf(asked, l), since = at)
+                else -> copy(asked = l, askedByUs = byUs, askedAt = at)
+            }
+            AnmpSpot.SHARED -> when {
+                answers && l > 0 -> none.copy(level = minOf(asked, l), since = at)
+                answers -> none
+                // Older apps: lowering or ending what both agreed on, without a question before.
+                l == 0 -> copy(level = 0, since = 0)
+                this.level > 0 && l < this.level -> copy(level = l)
+                else -> return this
+            }
+            AnmpSpot.ENDED -> none.copy(level = 0, since = 0)
+            AnmpSpot.WITHDRAWN -> if (asked > 0 && askedByUs == byUs) none else return this
+            else -> return this
+        }
+        return next.copy(at = at, lastKind = kind, lastByUs = byUs)
+    }
+}
+
 /** A person asks us to be its contact for calls, not answered yet; [circleId] if it asked a whole circle. */
 @JsExport
 @Serializable

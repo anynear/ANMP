@@ -228,6 +228,29 @@ class RadioWayTest {
         assertTrue(read.viaRadio)
     }
 
+    /** ADR 0123 §2: a card about sharing the place counts over radio alone as over the internet, on both sides. */
+    @Test
+    fun aSharingCardOverRadioCountsToo() = world {
+        val a = device("Anna")
+        val b = device("Ben")
+        agreeContact(b.core, a.core)
+        a.await<CoreEvent.MemberUpdated>(30.seconds) { it.member.deviceId == b.deviceId && it.member.circleId == MemberState.CONTACTS }
+        val air = FakeAir()
+        a.radio(air)
+        b.radio(air)
+        val mid = newMid()
+        val at = 1_700_000_000_000L
+        val ask = MessageSpot(app.anynear.anmp.AnmpSpot.SHARE, level = app.anynear.anmp.AnmpPlace.EXACT)
+        // The sender's own step, queued for radio only.
+        a.core.queueRadioText(null, b.deviceId, mid, at, "Standort freigeben?", spot = ask)
+        assertTrue(a.core.sharing(b.info.personId).askedByUs)
+        a.core.sendRadioPacket(assertNotNull(a.core.radioTextPacket(null, b.deviceId, mid, at, "Standort freigeben?", spot = ask)))
+        b.await<CoreEvent.RadioMessage>(30.seconds) { it.mid == mid }
+        val seen = b.core.sharing(a.info.personId)
+        assertEquals(app.anynear.anmp.AnmpPlace.EXACT, seen.asked)
+        assertTrue(!seen.askedByUs)
+    }
+
     @Test
     fun radioMessageTellsTheSendersNode() = world {
         val a = device("Anna")

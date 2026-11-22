@@ -64,6 +64,9 @@ internal interface RadioCore {
     /** A call for the helpers or an answer to it heard over radio in [circleId] (ADR 0083 §7), taken like one from the internet. */
     suspend fun onSos(circleId: String, fromDevice: String, ts: Long, sos: AnmpSos)
 
+    /** A card about sharing the place in a direct message from [fromDevice] (ADR 0123 §2), [ts] ms. */
+    suspend fun onSharingCard(fromDevice: String, kind: Int, level: Int?, ts: Long) = Unit
+
     /** What [fromDevice]'s person shares of its place, heard over radio (ADR 0121 §13), taken like one from the internet. */
     suspend fun onPlace(fromDevice: String, ts: Long, place: AnmpPlace)
 
@@ -605,6 +608,8 @@ internal class RadioWay(
                 if ((message.header.kind == AnmpKind.DIRECT) != (circle == null)) return
                 val id = content.id ?: return
                 val mid = B64.encode(id)
+                // A card about sharing the place, over radio alone as over the internet (ADR 0123 §2).
+                if (circle == null) MessageSpot.of(content.spot)?.let { core.onSharingCard(sender.deviceId, it.kind, it.level, ts) }
                 core.emit(
                     CoreEvent.RadioMessage(
                         conversation = conversation,

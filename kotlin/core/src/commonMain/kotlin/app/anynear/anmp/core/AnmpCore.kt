@@ -3249,6 +3249,7 @@ class AnmpCore(
         }
         if (!any) return null
         if (place != null) update { s -> s.copy(placesSent = s.placesSent + (person to "${place.level}/${place.until ?: 0}")) }
+        spot?.takeIf { it.plausible }?.let { takeSharingCard(person, true, it.kind, it.level, ts * 1000) }
         if (own) postOwn(AnmpKind.DIRECT, content(id = mid, text = text, attachments = attachments.map { it.attachment }, ts = ts, peer = person, link = wire, ref = reply?.first, refFrom = reply?.second, intro = intro, passedOn = passedOn, spot = spot))
         dropPrepared(withImage)
         return Outgoing(midText, null)
@@ -3353,6 +3354,8 @@ class AnmpCore(
 
     /** Emits a received direct message and remembers its entry for a later `delete`. */
     private suspend fun emitReceived(e: CoreEvent.Message, space: Key, objectId: String) {
+        // A card about sharing the place, from the other person or an own copy (ADR 0123 §2): kept before the app hears.
+        (e.conversation as? Conversation.Direct)?.let { d -> e.spot?.let { takeSharingCard(personOf(d.personId), e.fromPerson == ownPersonId, it.kind, it.level, e.timestampMillis) } }
         emit(e)
         e.mid?.let { rememberReceived(it, space, objectId) }
     }
@@ -3529,26 +3532,34 @@ class AnmpCore(
      * Asks every member of [circleIds] and every person of [personIds] to be a contact for the own calls: who answered
      * is not asked again, and who was asked less than [SOS_REASK_MILLIS] ago is not either, unless [again]. Someone
      * without an answer is asked again after that time: its app may have been one that did not know the question yet
-     * and dropped it. Wakes like a message. `false` if nothing went out.
+     * and dropped it. Wakes like a message. `false` if nothing went out. Persons in [except] are never asked, also not
+     * through a circle (ADR 0123 §3: the own person ended them): a circle with one of them is asked person by person.
      */
-    suspend fun askSosContacts(circleIds: List<String>, personIds: List<String>, again: Boolean = false): Boolean = onCore {
+    suspend fun askSosContacts(circleIds: List<String>, personIds: List<String>, again: Boolean = false, except: List<String> = emptyList()): Boolean = onCore {
         opened.await()
         val now = now()
         val known = state.sosContacts.filter { it.state != SosContact.ASKED || now - it.at < SOS_REASK_MILLIS }.map { it.person }.toSet()
+        val skip = except.map { personOf(it) }.toSet()
         var any = false
         val asked = mutableSetOf<String>()
+        val single = mutableSetOf<String>()
         for (circleId in circleIds.distinct()) {
             currentCircle(circleId) ?: continue
             val members = state.members.filter { it.circleId == circleId }.map { personOf(it.deviceId) }.filter { it != ownPersonId }.toSet()
-            val open = if (again) members else members - known
+            val open = (if (again) members else members - known) - skip
             if (open.isEmpty()) continue
+            // The question into the circle would reach an excluded person, too: then one by one.
+            if (members.any { it in skip }) {
+                single += open
+                continue
+            }
             val c = content(id = Anmp.newMessageId(), sos = AnmpSos(Anmp.newMessageId(), AnmpSos.ASK), ts = now / 1000)
             if (postCircle(circleId, AnmpKind.SOS, c, notify = true) != null) {
                 any = true
                 asked += open
             }
         }
-        for (person in personIds.map { personOf(it) }.distinct().filter { it != ownPersonId && it !in asked && (again || it !in known) }) {
+        for (person in (personIds.map { personOf(it) }.filter { it !in skip && (again || it !in known) } + single).distinct().filter { it != ownPersonId && it !in asked }) {
             val c = content(id = Anmp.newMessageId(), sos = AnmpSos(Anmp.newMessageId(), AnmpSos.ASK), ts = now / 1000)
             if (postPerson(person, AnmpKind.SOS, c, notify = true)) {
                 any = true
@@ -3620,6 +3631,59 @@ class AnmpCore(
         changed.forEach { emit(CoreEvent.SosContactsChanged(it)) }
     }
 
+    // --- „Standort freigeben“ (ADR 0123 §2) ------------------------------------------------------
+
+    /** The sharings of the place with other persons that hold or wait for an answer. */
+    fun sharings(): List<PlaceSharing> = state.sharings.filter { it.active || it.open }
+
+    /** The sharing with [person], also without one (then all 0). */
+    fun sharing(person: String): PlaceSharing = personOf(person).let { p -> state.sharings.firstOrNull { it.person == p } ?: PlaceSharing(p) }
+
+    /**
+     * Takes a sharing the app kept itself before it moved into the core (ADR 0123 §9): [level] what both agreed on,
+     * [asked] an own open question. Only if the core knows nothing of [person] yet. `false` if it took nothing.
+     */
+    suspend fun adoptSharing(person: String, level: Int, asked: Int = 0): Boolean = onCore {
+        opened.await()
+        val p = personOf(person)
+        if (p == ownPersonId || state.sharings.any { it.person == p }) return@onCore false
+        val ok = { l: Int -> l == AnmpPlace.AREA || l == AnmpPlace.EXACT }
+        if (!ok(level) && !ok(asked)) return@onCore false
+        val t = now()
+        val next = PlaceSharing(p, level = level.takeIf(ok) ?: 0, since = if (ok(level)) t else 0, asked = asked.takeIf(ok) ?: 0, askedByUs = ok(asked), askedAt = if (ok(asked)) t else 0)
+        update { s -> s.copy(sharings = s.sharings + next) }
+        emit(CoreEvent.SharingChanged(p))
+        return@onCore true
+    }
+
+    /**
+     * A card about sharing the place with [person], over the internet or over radio (ADR 0123 §2). [at] counts in whole
+     * seconds, as the content carries it: the same card on both ways is then one step.
+     */
+    private suspend fun takeSharingCard(person: String, byUs: Boolean, kind: Int, level: Int?, at: Long) {
+        if (kind < AnmpSpot.SHARE || kind > AnmpSpot.WITHDRAWN || person == ownPersonId) return
+        val before = state.sharings.firstOrNull { it.person == person } ?: PlaceSharing(person)
+        val next = before.take(byUs, kind, level, at / 1000 * 1000)
+        if (next == before) return
+        update { s -> s.copy(sharings = (s.sharings.filter { it.person != person } + next).takeLast(SHARINGS_MAX)) }
+        emit(CoreEvent.SharingChanged(person))
+    }
+
+    /**
+     * The own person no longer counts [person] as its contact for calls (ADR 0123 §3): [person] learns it and forgets
+     * its yes, and the contact is forgotten here. `false` if it was no contact of ours.
+     */
+    suspend fun endSosContact(person: String): Boolean = onCore {
+        opened.await()
+        val to = personOf(person)
+        if (state.sosContacts.none { it.person == to }) return@onCore false
+        val c = content(id = Anmp.newMessageId(), sos = AnmpSos(Anmp.newMessageId(), AnmpSos.DROPPED), ts = nowS())
+        postPerson(to, AnmpKind.SOS, c)
+        update { s -> s.copy(sosContacts = s.sosContacts.filter { it.person != to }) }
+        emit(CoreEvent.SosContactsChanged(to))
+        return@onCore true
+    }
+
     /** No longer a contact of ours, e.g. taken out of the list: forgotten here; its yes for our calls is not needed any more. */
     suspend fun forgetSosContact(person: String): Boolean = onCore {
         val to = personOf(person)
@@ -3640,6 +3704,14 @@ class AnmpCore(
                     update { s -> s.copy(sosAsks = (s.sosAsks + SosAsk(person, at, circleId)).takeLast(SOS_ASKS_MAX)) }
                     emit(CoreEvent.SosAsked(person, circleId))
                 }
+            }
+            // The asker no longer counts us as its contact: its question and our yes are over, on every own device.
+            AnmpSos.DROPPED -> {
+                if (circleId != null) return
+                if (person !in state.sosAgreed && state.sosAsks.none { it.person == person }) return
+                update { s -> s.copy(sosAgreed = s.sosAgreed - person, sosAsks = s.sosAsks.filter { it.person != person }) }
+                keepSosAnswer(person, false)
+                emit(CoreEvent.SosContactsChanged(person))
             }
             // An answer counts only from someone we asked, and only sent to us alone.
             AnmpSos.AGREE, AnmpSos.REFUSE -> {
@@ -5329,6 +5401,10 @@ class AnmpCore(
                 this@AnmpCore.onPlace(this@AnmpCore.personOf(fromDevice), ts, place)
             }
 
+            override suspend fun onSharingCard(fromDevice: String, kind: Int, level: Int?, ts: Long) = withContext(serial) {
+                takeSharingCard(this@AnmpCore.personOf(fromDevice), false, kind, level, ts)
+            }
+
             override suspend fun onSos(circleId: String, fromDevice: String, ts: Long, sos: AnmpSos) = withContext(serial) {
                 if (circleId.isEmpty()) this@AnmpCore.onSos(this@AnmpCore.personOf(fromDevice), null, ts, sos)
                 else if (circle(circleId) != null) this@AnmpCore.onSos(this@AnmpCore.personOf(fromDevice), circleId, ts, sos)
@@ -5398,6 +5474,8 @@ class AnmpCore(
         place: PlaceShare? = null,
     ) {
         val entry = RadioQueued(mid, circleId, deviceId, tsMillis, text, replyTo = replyTo, replyFrom = replyFrom, spot = spot, place = place.takeIf { circleId == null })
+        // A card about sharing the place that goes over radio alone counts like one over the internet (ADR 0123 §2).
+        if (circleId == null && deviceId != null) spot?.let { takeSharingCard(personOf(deviceId), true, it.kind, it.level, tsMillis) }
         radioLock.withLock {
             radio?.queueText(entry) ?: RadioQueue.save(platform.store, RadioQueue.load(platform.store).filterNot { it.key == entry.key } + entry)
         }
@@ -6807,6 +6885,7 @@ class AnmpCore(
         private val PLACE_LIFETIME = 1.days
         private const val SOS_MIDS = 30
         private const val SOS_ASKS_MAX = 50
+        private const val SHARINGS_MAX = 500
 
         /** Setting of the core in the profile space: the own answers to contacts for calls (ADR 0121 §25). */
         internal const val SOS_ANSWERS = "anmp:sos.answers"

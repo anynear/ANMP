@@ -22,14 +22,9 @@ class StreamTest {
     fun inTheBackgroundTheStreamReplacesPolling() = world {
         val (a, b) = familyOfTwo()
         b.core.setBackground(true)
-        eventually { b.core.streamStats.value.connects == 1 }
-        // Send only once the watches on the relays have settled; before that the message is not announced over the
-        // stream but found by the catch-up (missed = 1), as happened on slow CI machines.
-        var settled = -1
-        eventually {
-            val n = net.relays.sumOf { it.watches.size }
-            (n > 0 && n == settled).also { settled = n; delay(500) }
-        }
+        // The watches are set before the stream opens; send once the first catch-up is over, so that only the stream
+        // can bring the message.
+        eventually { b.core.streamStats.value.let { it.connects == 1 && it.catchUps >= 1 } }
         val out = assertNotNull(a.core.sendDirect(b.deviceId, "Über den Stream"))
         // 15 s like the other stream tests: on slow CI machines the message sometimes took longer than 5 s.
         b.await<CoreEvent.Message>(15.seconds) { it.mid == out.mid }

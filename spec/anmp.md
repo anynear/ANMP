@@ -411,12 +411,13 @@ over radio) and, like a direct message, to every chosen person that is in none o
 | Field | Name | Type | Meaning |
 |---|---|---|---|
 | 0 | id | bstr 8 | names the call, random |
-| 1 | state | uint | 1 raised (the first packet and every update), 2 ended (the all-clear), 3 a helper looks after it; 4 to 7 see **Contacts for calls**. Unknown → drop the packet |
+| 1 | state | uint | 1 raised (the first packet and every update), 2 ended (the all-clear), 3 a helper looks after it; 4 to 8 see **Contacts for calls**. Unknown → drop the packet |
 | 2 | position | position | where the person is now |
 | 3 | battery | uint | battery in percent (0…100) |
 | 4 | trail | [* position] | where the phone was before, oldest first, at most 10 |
 | 5 | start | uint, s | when the call began |
 | 6 | plan | bstr 8 | the sign of life the call comes from (see **A call from a sign of life**); absent for a call raised by hand |
+| 7 | precise | bool | state 8 only, and there required: whether a call of the sender carries its precise place |
 
 Every packet of the person carries the whole state; the one with the newer sender time replaces what the reader knew.
 A call belongs to the person whose packet a reader saw first: packets with its ID from another person are dropped,
@@ -437,6 +438,12 @@ an answer is sent again after a day, not sooner: a reader that did not know stat
 someone the reader asked. The check is the reader's: a call (state 1) from a person the reader did not say yes to is
 shown, but must not ring loudly. That holds for calls from a sign of life as well. Apps that do not know these states
 drop the packets. Not over radio. Vector: `cbor.contentSosAsk`.
+
+State 8 (ADR 0125 §8) goes from the asker to a contact alone, with field 0 (a random ID) and field 7: `true` if a call
+of the asker carries its precise place, `false` if its phone does not allow that. The asker sends it after the
+contact's yes and whenever the answer changes; the newest by sender time counts. A reader takes it only from someone
+it said yes to, and shows it with that person, so that nobody relies on a place that will not come. Into a circle it
+is dropped. Not over radio. Vector: `cbor.contentSosReady`.
 
 **A call from a sign of life** (ADR 0083 §5.4, ADR 0121 §22): when the alarm of a sign of life is due (`due` + `alarm`
 without a confirmation), it is a call for the helpers of that circle. Its ID is not random, so that everyone names

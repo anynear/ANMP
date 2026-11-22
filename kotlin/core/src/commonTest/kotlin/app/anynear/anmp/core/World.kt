@@ -4,6 +4,7 @@ import app.anynear.andp.B64
 import app.anynear.anmp.AnmpDevice
 import app.anynear.anmp.AnmpKeys
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -19,6 +20,12 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.test.assertNotNull
+
+/**
+ * Upper limit of [Device.await] and [eventually]: both end as soon as the event or condition is there, so a generous
+ * limit costs nothing; on a loaded CI runner (3 cores, iOS simulator) single steps took more than 15 s.
+ */
+internal val WAIT_LIMIT = 30.seconds
 
 /** Short times so that a test with real time runs in seconds. */
 internal val TEST_TIMINGS = CoreTimings(
@@ -50,7 +57,7 @@ internal class Device(val name: String, val core: AnmpCore, val secrets: MemoryS
 
     val deviceId: String get() = info.deviceId
 
-    suspend inline fun <reified T : CoreEvent> await(timeout: Duration = 15.seconds, crossinline predicate: (T) -> Boolean = { true }): T =
+    suspend inline fun <reified T : CoreEvent> await(timeout: Duration = WAIT_LIMIT, crossinline predicate: (T) -> Boolean = { true }): T =
         withTimeout(timeout) { events.first { list -> list.any { it is T && predicate(it) } } }.first { it is T && predicate(it) } as T
 
     suspend inline fun <reified T : CoreEvent> none(within: Duration, crossinline predicate: (T) -> Boolean = { true }): Boolean =
@@ -87,7 +94,8 @@ internal class World(val net: FakeNet, val scope: CoroutineScope) {
         val host = TestHost()
         val core = AnmpCore(scope, config, AnmpPlatform(secrets, store, blobs, clock = clock, connector = net.connector, log = CoreLog { }, http = http), host)
         val d = Device(name, core, secrets, store, blobs, host)
-        scope.launch {
+        // Subscribed before start: events have no replay, and a collector that starts late misses the first ones.
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
             core.events.collect { e ->
                 if (e is CoreEvent.Message && e.conversation is Conversation.Circle && e.opened != null) {
                     host.history.getOrPut((e.conversation as Conversation.Circle).circleId) { mutableListOf() } += e.opened!!
@@ -135,7 +143,7 @@ internal fun world(relays: Int = 4, block: suspend World.() -> Unit) = runTest(t
 }
 
 /** Polls [condition] until it holds or [timeout]. */
-internal suspend fun eventually(timeout: Duration = 15.seconds, condition: suspend () -> Boolean) {
+internal suspend fun eventually(timeout: Duration = WAIT_LIMIT, condition: suspend () -> Boolean) {
     withTimeout(timeout) {
         while (!condition()) kotlinx.coroutines.delay(50)
     }
@@ -145,7 +153,7 @@ internal suspend fun eventually(timeout: Duration = 15.seconds, condition: suspe
  * [reader] adds the contact link [link] of [owner], and [owner] agrees to the request that follows (ADR 0116): what
  * adding a contact link meant before. Returns the result of [AnmpCore.addContact].
  */
-internal suspend fun agreeContact(reader: AnmpCore, owner: AnmpCore, link: String? = null, timeout: Duration = 15.seconds): AddContactResult {
+internal suspend fun agreeContact(reader: AnmpCore, owner: AnmpCore, link: String? = null, timeout: Duration = WAIT_LIMIT): AddContactResult {
     val before = owner.contactRequests().map { it.person }.toSet()
     val r = reader.addContact(link ?: owner.ownContactLink())
     var person: String? = null

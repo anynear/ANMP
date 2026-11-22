@@ -13,8 +13,10 @@ import app.anynear.andp.PutOptions
 import app.anynear.andp.Ref
 import app.anynear.andp.Relay
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.async
@@ -176,7 +178,11 @@ internal class Transport(
     /**
      * Queues a write. [contents] are (object ID, sealed bytes) with placement object; [entry] the enveloped
      * packet with placement space and `refs` to the contents. Returns at once; [CoreEvent.Stored] and
-     * [CoreEvent.SendFailed] tell the outcome.
+     * [CoreEvent.SendFailed] tell the outcome, and [stored] (if given) completes with `true` once one relay took the
+     * entry (or the job has no entry and its contents went out), with `false` if none did. [contentsStored] (if given)
+     * completes once every content lies at one relay (`false` if one was refused); the entry waits for [after]: an
+     * entry that refers to the contents of another job goes out only once they can be read (ADR 0042 §4, „contents
+     * only once“). Not kept over a restart: then the entry goes at once.
      */
     suspend fun submit(
         space: Key,
@@ -205,6 +211,9 @@ internal class Transport(
         notBefore: Long = 0,
         /** Writes of the same group replace each other, see [cancelGroup]. */
         group: String = "",
+        stored: CompletableDeferred<Boolean>? = null,
+        contentsStored: CompletableDeferred<Boolean>? = null,
+        after: Deferred<Boolean>? = null,
     ): PendingJob {
         val jobId = ID.of(space.unsafe() + (entry ?: ByteArray(0)) + contents.flatMap { it.first.bytes.toList() }.toByteArray() + platform.clock.nowMillis().toString().encodeToByteArray()).toString().take(22)
         contents.forEach { (id, bytes) -> platform.blobs.write(blobName(jobId, id.toString()), bytes) }
@@ -226,12 +235,24 @@ internal class Transport(
         val job = PendingJob(jobId, space.toString(), contentObjects, entryObject, ref, notify, platform.clock.nowMillis(), alarm = notify && alarm, hold = holdObject,
             group = group)
         save { it + job }
-        scope.launch { run(job, known, knownContent) }
+        scope.launch { run(job, known, knownContent, Waits(stored, contentsStored, after)) }
         return job
     }
 
-    private suspend fun run(job: PendingJob, known: SpaceAccess? = null, knownContent: SpaceAccess? = null) {
-        if (!lock.withLock { running.add(job.id) }) return
+    /** Runs [block] in the background once [stored] completed with `true` (see [submit]); completes like [stored] after it. */
+    fun afterStored(stored: Deferred<Boolean>, block: suspend () -> Unit): Deferred<Boolean> =
+        scope.async { stored.await().also { ok -> if (ok) block() } }
+
+    /** What [submit] waits for or tells (not kept over a restart). */
+    private class Waits(val stored: CompletableDeferred<Boolean>?, val contentsStored: CompletableDeferred<Boolean>?, val after: Deferred<Boolean>?)
+
+    private suspend fun run(job: PendingJob, known: SpaceAccess? = null, knownContent: SpaceAccess? = null, waits: Waits = Waits(null, null, null)) {
+        val stored = waits.stored
+        if (!lock.withLock { running.add(job.id) }) {
+            stored?.complete(false)
+            waits.contentsStored?.complete(false)
+            return
+        }
         try {
             val a = known ?: access(job.space)
             if (a == null) {
@@ -248,6 +269,7 @@ internal class Transport(
                 first
             }
             val contentsOk = firsts.all { it.await() }
+            waits.contentsStored?.complete(contentsOk)
             if (!contentsOk) {
                 platform.log.log("write ${job.id}: a content was refused, entry not written")
                 if (job.ref.isNotEmpty()) events(CoreEvent.SendFailed(job.ref))
@@ -260,11 +282,16 @@ internal class Transport(
                 if (job.ref.isNotEmpty()) events(CoreEvent.SendFailed(job.ref))
                 return drop(job)
             }
+            // The contents this entry refers to are written by another job: wait until they can be read.
+            waits.after?.await()
             val entry = job.entry
             if (isCancelled(job)) return
-            val stored: suspend (Int) -> Unit = { n -> if (job.ref.isNotEmpty()) events(CoreEvent.Stored(job.ref, n)) }
+            val onStored: suspend (Int) -> Unit = { n ->
+                if (n >= 1) stored?.complete(true)
+                if (job.ref.isNotEmpty()) events(CoreEvent.Stored(job.ref, n))
+            }
             var retry = false
-            var ok = if (entry == null) true else deliver(job, entry, a, deadline, onDenied = { retry = it }, onStored = stored)
+            var ok = if (entry == null) true else deliver(job, entry, a, deadline, onDenied = { retry = it }, onStored = onStored)
             // Refused for a revoked grant while another one is there (contact added again): try with that one.
             var used: SpaceAccess = a
             var left = MAX_GRANT_RETRIES
@@ -273,12 +300,16 @@ internal class Transport(
                 val fresh = access(job.space) ?: break
                 if (fresh.grant?.hash == used.grant?.hash) break
                 used = fresh
-                ok = deliver(job, entry, fresh, deadline, onDenied = { retry = it }, onStored = stored)
+                ok = deliver(job, entry, fresh, deadline, onDenied = { retry = it }, onStored = onStored)
             }
+            stored?.complete(ok)
             if (!ok && job.ref.isNotEmpty()) events(CoreEvent.SendFailed(job.ref))
             // Wait for the contents to reach all their holders before forgetting the job.
             drop(job)
         } finally {
+            // Every early return (no access, a content or the receipt refused, withdrawn) and a failure end here.
+            stored?.complete(false)
+            waits.contentsStored?.complete(false)
             // A withdrawn job stays in [cancelled]: its contents may still be on their way in the background.
             lock.withLock { running.remove(job.id) }
         }

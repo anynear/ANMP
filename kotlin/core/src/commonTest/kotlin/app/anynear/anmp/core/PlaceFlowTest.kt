@@ -210,6 +210,29 @@ class PlaceFlowTest {
     }
 
     @Test
+    fun contactsLearnWhetherACallCarriesThePrecisePlace() = world {
+        val (a, b, c) = three()
+        val circle = a.core.circles.value.single()
+        // Before Anna's phone says anything, nobody knows.
+        a.core.setSosPrecise(false)
+        assertTrue(a.core.askSosContacts(listOf(circle.id), emptyList()))
+        eventually { b.core.sosAsks().any { it.person == a.info.personId } }
+        eventually { c.core.sosAsks().any { it.person == a.info.personId } }
+        assertNull(b.core.sosPreciseOf(a.info.personId))
+        // Ben's yes: he learns right away that Anna's calls come without her precise place. Tom said no and learns nothing.
+        assertTrue(b.core.answerSosAsk(a.info.personId, true))
+        assertTrue(c.core.answerSosAsk(a.info.personId, false))
+        eventually { b.core.sosPreciseOf(a.info.personId) == false }
+        assertNull(c.core.sosPreciseOf(a.info.personId))
+        // Anna allows the precise place: Ben learns the change, once.
+        a.core.setSosPrecise(true)
+        eventually { b.core.sosPreciseOf(a.info.personId) == true }
+        // Ben takes his yes back: what Anna said no longer shows.
+        assertTrue(b.core.answerSosAsk(a.info.personId, false))
+        assertNull(b.core.sosPreciseOf(a.info.personId))
+    }
+
+    @Test
     fun anAnswerOnOneOwnDeviceHoldsOnTheOthers() = world {
         val (a, b, _) = three()
         val tablet = addTablet(b)

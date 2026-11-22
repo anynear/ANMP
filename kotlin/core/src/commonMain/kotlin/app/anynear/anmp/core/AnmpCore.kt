@@ -80,7 +80,9 @@ import app.anynear.anmp.AnmpSyncKeys
 import app.anynear.anmp.AnmpSyncAsked
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
@@ -114,6 +116,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -333,6 +336,7 @@ class AnmpCore(
         cs.launch { streamLoop() }
         cs.launch { announceOnChange() }
         cs.launch { syncOnChange() }
+        cs.launch { profileLoop() }
         if (tellContactsOnStart) cs.launch {
             delay(timings.reannounceDelay)
             state.members.filter { it.circleId == MemberState.CONTACTS }.map { it.deviceId }.distinct().forEach { runCatching { sendProfileTo(it) } }
@@ -762,8 +766,7 @@ class AnmpCore(
         val newest = newestVault(r.entries.values)
         val current = newestVault(there.entries.values)
         if (newest != null && (current == null || newest.changed > current.changed)) {
-            to.put(coreCbor.encodeToByteArray(VaultEntry.serializer(), newest))
-            if (there.entries.isNotEmpty()) to.delete(there.entries.keys)
+            to.replace(coreCbor.encodeToByteArray(VaultEntry.serializer(), newest), there.entries.keys)
         }
         from.delete(r.entries.keys)
         return true
@@ -1572,7 +1575,10 @@ class AnmpCore(
                             streamLive.value = true
                             updateStreamStats { it.copy(connects = it.connects + 1) }
                             log.log("stream: live at ${relay.site}")
-                            launch { streamCatchUp(missed = connectedBefore) }
+                            // Read now: the launched block runs later, after connectedBefore became true, and counted
+                            // the first catch-up as missed when it found anything (iOS CI, 19.11.2026).
+                            val again = connectedBefore
+                            launch { streamCatchUp(missed = again) }
                             connectedBefore = true
                         }
                         Andp.STREAM_EVENT_NEW -> {
@@ -1790,7 +1796,7 @@ class AnmpCore(
             AnmpKind.SYNC -> {
                 c.keys?.let { k -> applyKeys(k, c.person) }
                 c.sync?.let { applySync(it) }
-                c.ownData?.takeIf { it.topic == PROFILE_TOPIC }?.let { cs.launch { profileSyncUntilComplete() } }
+                c.ownData?.takeIf { it.topic == PROFILE_TOPIC }?.let { profileWanted(notify = false) }
                 c.ownData?.takeIf { it.topic != PROFILE_TOPIC && it.parts.size <= MAX_HISTORY_PARTS }?.let { d -> receiveOwnData(d, o.fromDevice) }
             }
             else -> Unit
@@ -2024,16 +2030,34 @@ class AnmpCore(
 
     private fun contactPurpose(deviceId: String) = "contact:$deviceId"
 
-    private fun circlePurpose(circleId: String, epoch: Int) = "circle:$circleId:$epoch"
+    private fun circlePurpose(circleId: String, epoch: Int) = "$CIRCLE_PURPOSE$circleId:$epoch"
 
-    private fun hasIssued(purpose: String) = state.issued.any { it.purpose == purpose && !it.revoked && it.until > nowS() }
+    private fun hasIssued(purpose: String) = state.issued.any { it.purpose == purpose && !it.revoked && it.until > nowS() && it.forOwnInbox() }
+
+    /**
+     * Issued for the mailbox we have now. After a person key change (ADR 0042 §6) the grants of the old mailbox stay in
+     * [CoreState.issued] under the same purposes; handing one out again gave the contact a grant it rejects for the new
+     * mailbox, and it could not write to us any more (CI, 22.11.2026). Circle grants are the exception: the key change
+     * gives every circle a new epoch, whose announcement brings the grant for the new mailbox. One for the new mailbox
+     * under the old epoch would reach the stolen device too and be revoked by that key change a moment later, leaving
+     * the members with a grant the relays refuse.
+     */
+    private fun IssuedGrant.forOwnInbox(): Boolean =
+        purpose.startsWith(CIRCLE_PURPOSE) || runCatching { Grant.parse(grant).body.space == me.inbox }.getOrDefault(false)
 
     /** A grant for our mailbox for [purpose]; reused while more than [CoreTimings.grantRenewBefore] is left. */
     private suspend fun grantFor(purpose: String, grantee: Key?, lifetime: Duration = timings.grantLifetime, renewBefore: Duration = timings.grantRenewBefore): Grant {
         val now = nowS()
-        state.issued.lastOrNull { it.purpose == purpose && !it.revoked && it.until - now > renewBefore.inWholeSeconds }
+        state.issued.lastOrNull { it.purpose == purpose && !it.revoked && it.until - now > renewBefore.inWholeSeconds && it.forOwnInbox() }
             ?.let { g -> runCatching { Grant.parse(g.grant) }.getOrNull()?.let { return it } }
-        val g = Grant.issue(me.inboxOwner, GrantBody(me.inbox, Rights.WRITE, grantee, null, now + lifetime.inWholeSeconds, now - GRANT_BACKDATE))
+        // Same body in the same second would be the same grant (Ed25519 is deterministic) under another purpose, and
+        // revoked together with it, e.g. a contact grant by the key change of a circle (as in rekeyChannel).
+        var issued = now - GRANT_BACKDATE
+        var g = Grant.issue(me.inboxOwner, GrantBody(me.inbox, Rights.WRITE, grantee, null, now + lifetime.inWholeSeconds, issued))
+        while (state.issued.any { it.hash == g.hash.toString() }) {
+            issued++
+            g = Grant.issue(me.inboxOwner, GrantBody(me.inbox, Rights.WRITE, grantee, null, now + lifetime.inWholeSeconds, issued))
+        }
         update { s -> s.copy(issued = s.issued + IssuedGrant(purpose, g.toString(), g.hash.toString(), g.body.until)) }
         return g
     }
@@ -2205,8 +2229,10 @@ class AnmpCore(
         var any = false
         val targets = recipientsOf(person)
         val waking = wakingTargets(targets)
+        val shared = contents.takeIf { it.isNotEmpty() }?.let { CompletableDeferred<Boolean>() }
         for (t in targets) {
-            if (postTo(t, kind, content, if (any) emptyList() else contents, ref, notify && t in waking, lifetime)) any = true
+            val first = !any
+            if (postTo(t, kind, content, if (first) contents else emptyList(), ref, notify && t in waking, lifetime, shared = shared, first = first)) any = true
         }
         return any
     }
@@ -2247,6 +2273,12 @@ class AnmpCore(
         notify: Boolean = false,
         lifetime: Duration? = null,
         contentSpace: Key? = null,
+        /**
+         * Contents only with the first of several entries (ADR 0042 §4): [first] tells [shared] when they are stored,
+         * the others wait for it. Else a later entry could arrive first and its attachment not be there yet (Gone).
+         */
+        shared: CompletableDeferred<Boolean>? = null,
+        first: Boolean = true,
     ): Boolean {
         if (revokedHere) return false
         val a = peerAccess(t) ?: return false.also { log.log("no grant for the mailbox of ${t.peer.deviceId}") }
@@ -2255,7 +2287,8 @@ class AnmpCore(
         val until = untilOf(lifetime ?: lifetimeOf(kind))
         val hold = if (contentSpace != null) null else holdFor(until, contents) { c -> a.seal(Packets.encode(me, AnmpKind.HOLD, c, Anmp.DIRECT_SCOPE, null, t.peer).packet) }
         transport.submit(a.space, entry, until, contents, contentUntilOf(until), ref, notify, contentSpace = contentSpace, known = a,
-            knownContent = if (contentSpace == me.inbox) ownAccess() else null, hold = hold)
+            knownContent = if (contentSpace == me.inbox) ownAccess() else null, hold = hold,
+            contentsStored = shared?.takeIf { first }, after = shared?.takeIf { !first })
         return true
     }
 
@@ -3232,6 +3265,7 @@ class AnmpCore(
         // A new contact known only from its link: also to its mailbox, so that every device of it opens it (ADR 0084).
         val mailbox = mailboxTargetOf(person)
         val waking = wakingTargets(targets)
+        val shared = contents.takeIf { it.isNotEmpty() }?.let { CompletableDeferred<Boolean>() }
         for (t in targets + listOfNotNull(mailbox)) {
             val grant = if (t === mailbox || t.mailbox) {
                 grantFor(contactPurpose(t.peer.deviceId), null)
@@ -3245,7 +3279,8 @@ class AnmpCore(
                 // Only towards the reader; the copy for own other devices carries no place.
                 place = place,
             )
-            if (postTo(t, AnmpKind.DIRECT, c, if (any) emptyList() else contents, ref = midText, notify = t === mailbox || t in waking)) any = true
+            val first = !any
+            if (postTo(t, AnmpKind.DIRECT, c, if (first) contents else emptyList(), ref = midText, notify = t === mailbox || t in waking, shared = shared, first = first)) any = true
         }
         if (!any) return null
         if (place != null) update { s -> s.copy(placesSent = s.placesSent + (person to "${place.level}/${place.until ?: 0}")) }
@@ -3529,6 +3564,35 @@ class AnmpCore(
     fun sosAgreed(): List<String> = state.sosAgreed
 
     /**
+     * Whether a call of [person], whose contact we are, carries its precise place (ADR 0125 §8): `false` if its phone
+     * does not allow it, `null` if it never said (older app, or not yet).
+     */
+    fun sosPreciseOf(person: String): Boolean? = personOf(person).let { p ->
+        state.sosReady.firstOrNull { it.person == p }?.takeIf { p in state.sosAgreed }?.precise
+    }
+
+    /**
+     * Tells the own contacts for calls whether the own calls carry the precise place (ADR 0125 §8): each contact that
+     * said yes learns a change once, a new one right after its yes.
+     */
+    suspend fun setSosPrecise(precise: Boolean) = onCore {
+        opened.await()
+        if (state.sosPreciseOwn != precise) update { s -> s.copy(sosPreciseOwn = precise) }
+        tellSosPrecise()
+    }
+
+    private suspend fun tellSosPrecise() {
+        val own = state.sosPreciseOwn ?: return
+        val agreed = state.sosContacts.filter { it.state == SosContact.AGREED }.map { it.person }.toSet()
+        for (p in agreed) {
+            if (state.sosPreciseTold[p] == own) continue
+            val c = content(id = Anmp.newMessageId(), sos = AnmpSos(Anmp.newMessageId(), AnmpSos.READY, precise = own), ts = nowS())
+            if (postPerson(p, AnmpKind.SOS, c)) update { s -> s.copy(sosPreciseTold = s.sosPreciseTold + (p to own)) }
+        }
+        if (state.sosPreciseTold.keys.any { it !in agreed }) update { s -> s.copy(sosPreciseTold = s.sosPreciseTold.filterKeys { it in agreed }) }
+    }
+
+    /**
      * Asks every member of [circleIds] and every person of [personIds] to be a contact for the own calls: who answered
      * is not asked again, and who was asked less than [SOS_REASK_MILLIS] ago is not either, unless [again]. Someone
      * without an answer is asked again after that time: its app may have been one that did not know the question yet
@@ -3679,7 +3743,7 @@ class AnmpCore(
         if (state.sosContacts.none { it.person == to }) return@onCore false
         val c = content(id = Anmp.newMessageId(), sos = AnmpSos(Anmp.newMessageId(), AnmpSos.DROPPED), ts = nowS())
         postPerson(to, AnmpKind.SOS, c)
-        update { s -> s.copy(sosContacts = s.sosContacts.filter { it.person != to }) }
+        update { s -> s.copy(sosContacts = s.sosContacts.filter { it.person != to }, sosPreciseTold = s.sosPreciseTold - to) }
         emit(CoreEvent.SosContactsChanged(to))
         return@onCore true
     }
@@ -3693,7 +3757,7 @@ class AnmpCore(
         return@onCore true
     }
 
-    private suspend fun onSosContact(person: String, circleId: String?, at: Long, st: Int) {
+    private suspend fun onSosContact(person: String, circleId: String?, at: Long, st: Int, precise: Boolean? = null) {
         if (person == ownPersonId) return
         when (st) {
             AnmpSos.ASK -> when {
@@ -3718,7 +3782,16 @@ class AnmpCore(
                 val known = state.sosContacts.firstOrNull { it.person == person } ?: return
                 if (circleId != null || known.at > at && known.state != SosContact.ASKED) return
                 val next = SosContact(person, if (st == AnmpSos.AGREE) SosContact.AGREED else SosContact.REFUSED, at)
-                update { s -> s.copy(sosContacts = s.sosContacts.filter { it.person != person } + next) }
+                update { s -> s.copy(sosContacts = s.sosContacts.filter { it.person != person } + next, sosPreciseTold = s.sosPreciseTold - person) }
+                emit(CoreEvent.SosContactsChanged(person))
+                // A new yes learns at once whether the own calls carry the precise place (ADR 0125 §8).
+                if (st == AnmpSos.AGREE) tellSosPrecise()
+            }
+            // Whether the calls of a person we said yes to carry its place; only to us alone.
+            AnmpSos.READY -> {
+                if (circleId != null || precise == null || person !in state.sosAgreed) return
+                if (state.sosReady.any { it.person == person && it.at > at }) return
+                update { s -> s.copy(sosReady = s.sosReady.filter { it.person != person } + SosReady(person, precise, at)) }
                 emit(CoreEvent.SosContactsChanged(person))
             }
         }
@@ -3892,7 +3965,7 @@ class AnmpCore(
         if (!w.plausible) return
         val id = B64.encode(w.id)
         val at = ts * 1000
-        if (w.state >= AnmpSos.ASK) return onSosContact(person, circleId, at, w.state)
+        if (w.state >= AnmpSos.ASK) return onSosContact(person, circleId, at, w.state, w.precise)
         val known = state.sos.firstOrNull { it.id == id }
         // Stored before the person of the sending device was known: the device stands for its person.
         val knownOwner = known?.owner?.let(::personOf)
@@ -4670,12 +4743,15 @@ class AnmpCore(
             if (!AnmpKeys.sha256(bytes).contentEquals(part.hash)) continue
             chunks += bytes
         }
+        // Their attachments lie in the circle space, like those of every circle message: the app loads them from there
+        // ([CoreEvent.Message.space]). With no space they were Gone at once (CI, 22.11.2026).
+        val space = currentCircle(h.circle)?.second?.space?.toString().orEmpty()
         val messages = chunks.flatMap { runCatching { coreCbor.decodeFromByteArray(historySerializer, it) }.getOrDefault(emptyList()) }
             .mapNotNull { opened ->
                 val o = Packets.openHistory(opened, h.circle)?.takeIf { it.kind == AnmpKind.CIRCLE } ?: return@mapNotNull null
                 val id = "history:${o.fromDevice}:${o.content.id?.let(B64::encode) ?: o.content.ts}"
                 val author = historyAuthorOf(o.fromDevice, o.content.ts * 1000) ?: return@mapNotNull null
-                messageEvent(Conversation.Circle(h.circle), id, "", o, history = true, person = author)
+                messageEvent(Conversation.Circle(h.circle), id, space, o, history = true, person = author)
             }
         h.parts.forEach { part ->
             val g = part.grant?.let { runCatching { Grant.decode(it) }.getOrNull() } ?: return@forEach
@@ -5103,7 +5179,7 @@ class AnmpCore(
     /** Our grant in the links of an own channel, if issued and not revoked. */
     private fun joinGrant(channelId: String): IssuedGrant? {
         val now = nowS()
-        return state.issued.lastOrNull { it.purpose == JOIN_PURPOSE + channelId && !it.revoked && it.until > now }
+        return state.issued.lastOrNull { it.purpose == JOIN_PURPOSE + channelId && !it.revoked && it.until > now && it.forOwnInbox() }
     }
 
     /** Issues (or renews) the grant for the links of an own channel. */
@@ -5594,7 +5670,7 @@ class AnmpCore(
             update { s -> s.copy(grants = s.grants.filter { it.until > t / 1000 }, issued = s.issued.filter { it.until > t / 1000 }) }
             // Contacts whose personal grant runs out get a new one.
             val renew = state.members.filter { it.circleId == MemberState.CONTACTS }.map { it.deviceId }.distinct().filter { d ->
-                state.issued.none { it.purpose == contactPurpose(d) && !it.revoked && it.until - t / 1000 > timings.grantRenewBefore.inWholeSeconds }
+                state.issued.none { it.purpose == contactPurpose(d) && !it.revoked && it.until - t / 1000 > timings.grantRenewBefore.inWholeSeconds && it.forOwnInbox() }
             }
             renew.forEach { runCatching { sendProfileTo(it) } }
             expireRequests()
@@ -6084,8 +6160,7 @@ class AnmpCore(
         val kept = read.entries.values.mapNotNull { runCatching { coreCbor.decodeFromByteArray(StateEntry.serializer(), it) }.getOrNull() }
             .maxByOrNull { it.ts }?.extras.orEmpty()
         val entry = StateEntry(now(), proof, sec.get(CoreIdentity.PERSON) ?: return, sec.get(CoreIdentity.INBOX) ?: return, sec.get(StoreKeys.SECRET), snapshot(), kept + recoveryExtras)
-        sp.put(coreCbor.encodeToByteArray(StateEntry.serializer(), entry))
-        if (older.isNotEmpty()) sp.delete(older)
+        sp.replace(coreCbor.encodeToByteArray(StateEntry.serializer(), entry), older)
     }
 
     /**
@@ -6102,16 +6177,9 @@ class AnmpCore(
         platform.secrets.put(STATE_SECRET, stateSecret)
         val code = RecoveryCode.newCode()
         val ref = "kern:" + B64.encode(code.copyOf(4))
-        val stored = CompletableDeferred<Boolean>()
-        val watch = cs.launch {
-            events.collect { e ->
-                if (e is CoreEvent.Stored && e.ref == ref) stored.complete(true)
-                if (e is CoreEvent.SendFailed && e.ref == ref) stored.complete(false)
-            }
-        }
-        kernSpace(code).put(coreCbor.encodeToByteArray(KernEntry.serializer(), KernEntry(rootSeed, stateSecret, now())), ref)
+        // Waits on the write itself: a collector of Stored started here could miss an early event.
+        val stored = kernSpace(code).put(coreCbor.encodeToByteArray(KernEntry.serializer(), KernEntry(rootSeed, stateSecret, now())), ref)
         val ok = withTimeoutOrNull(KERN_TIMEOUT) { stored.await() } == true
-        watch.cancel()
         if (!ok) return@onCore null
         backupState()
         platform.secrets.put(PENDING_CODE, code)
@@ -6250,8 +6318,7 @@ class AnmpCore(
         val read = sp.read()
         val older = read.entries.keys
         val keep = key ?: newestVault(read.entries.values)?.key
-        sp.put(coreCbor.encodeToByteArray(VaultEntry.serializer(), VaultEntry(changed, data, keep)))
-        if (older.isNotEmpty()) sp.delete(older)
+        sp.replace(coreCbor.encodeToByteArray(VaultEntry.serializer(), VaultEntry(changed, data, keep)), older)
     }
 
     /** The newest password vault on the relays. */
@@ -6499,25 +6566,55 @@ class AnmpCore(
     /** Settings of the person as known here (name → bytes). */
     suspend fun settings(): Map<String, ByteArray> = onCore { state.profile.settings.associate { it.name to B64.decode(it.value) } }
 
-    /** The last [profileSync] could not read everything (no answer, or a picture not readable yet). */
-    private var profileIncomplete = false
+    private fun profileChanged() = profileWanted(notify = true)
 
-    /**
-     * [profileSync] after a notice of another own device, again a few times while something could not be read yet:
-     * the notice comes only once, and without another try a new picture waited for the next change of the profile.
-     */
-    private suspend fun profileSyncUntilComplete() {
-        var wait = timings.backoffMin
-        repeat(PROFILE_SYNC_TRIES) { i ->
-            runCatching { profileSync() }
-            if (!profileIncomplete || i == PROFILE_SYNC_TRIES - 1) return
-            delay(wait)
-            wait = minOf(wait * 2, timings.backoffMax)
-        }
+    /** Asks [profileLoop] for a sync; [notify]: then tell the own other devices if it wrote (a change made here). */
+    private fun profileWanted(notify: Boolean) {
+        if (notify) profileNotify.value = true
+        profileBell.trySend(Unit)
     }
 
-    private fun profileChanged() {
-        cs.launch { runCatching { if (profileSync()) sendOwnData(PROFILE_TOPIC, ByteArray(0)) } }
+    private val profileBell = Channel<Unit>(Channel.CONFLATED)
+    private val profileNotify = MutableStateFlow(false)
+
+    /**
+     * One profile sync after another; wishes that come in meanwhile become one more. A sync no relay answered (no
+     * network list yet after the start, offline) is tried again by [CoreTimings.writeRetry]: a change made here would
+     * otherwise stay on this device until the next one (iOS CI, 19.11.2026). One that could not read a listed picture
+     * yet is tried again [PROFILE_SYNC_TRIES] times with growing pauses: the notice of another own device comes only
+     * once, and the picture would otherwise wait for the next change of the profile.
+     */
+    private suspend fun profileLoop() {
+        while (true) {
+            profileBell.receive()
+            var notify = profileNotify.getAndUpdate { false }
+            var tries = 0
+            var partial = 0
+            var pause = timings.backoffMin
+            while (true) {
+                val w = try {
+                    profileWrite()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    ProfileWrite(answered = false)
+                }
+                if (w.answered) {
+                    // The other own devices read the profile space when told: only once the entry is there, or they
+                    // find the old one and nothing tells them again. Offline they are told anyway.
+                    if (notify && w.stored != null) {
+                        withTimeoutOrNull(PROFILE_STORE_WAIT) { w.stored.await() }
+                        runCatching { sendOwnData(PROFILE_TOPIC, ByteArray(0)) }
+                        notify = false
+                    }
+                    if (w.complete || ++partial >= PROFILE_SYNC_TRIES) break
+                    delay(pause)
+                    pause = minOf(pause * 2, timings.backoffMax)
+                    continue
+                }
+                delay(timings.writeRetry.waitAfter(++tries))
+            }
+        }
     }
 
     /**
@@ -6525,13 +6622,33 @@ class AnmpCore(
      * on a tie the one on the relays. Takes what is newer there ([CoreEvent.ProfileChanged]) and writes the merged
      * profile back if this device had something newer. `true` if it wrote.
      */
-    suspend fun profileSync(): Boolean = onCore {
+    suspend fun profileSync(): Boolean = profileWrite().stored != null
+
+    /** One sync at a time on this device: two would each read the other's write half done. */
+    private val profileLock = Mutex()
+
+    /**
+     * [answered]: the profile space was read (or there is none to sync); [stored]: the merged profile written;
+     * [complete]: `false` if a listed picture could not be read yet.
+     */
+    private class ProfileWrite(val answered: Boolean, val stored: Deferred<Boolean>? = null, val complete: Boolean = true)
+
+    /** The last write of [profileMerge] with the deletion of the entries it replaced. */
+    private var profileReplacing: Deferred<Boolean>? = null
+
+    private suspend fun profileWrite(): ProfileWrite = profileLock.withLock {
+        // Until the last write replaced the older entries, the space shows several and the merge would write again.
+        profileReplacing?.let { withTimeoutOrNull(PROFILE_STORE_WAIT) { it.await() } }
+        profileMerge().also { w -> w.stored?.let { profileReplacing = it } }
+    }
+
+    /** The merge of [profileSync]. */
+    private suspend fun profileMerge(): ProfileWrite = onCore {
         opened.await()
-        if (revokedHere) return@onCore false
-        val sp = profileSpace() ?: return@onCore false
+        if (revokedHere) return@onCore ProfileWrite(answered = true)
+        val sp = profileSpace() ?: return@onCore ProfileWrite(answered = true)
         val read = sp.read()
-        profileIncomplete = !read.answered
-        if (!read.answered) return@onCore false
+        if (!read.answered) return@onCore ProfileWrite(answered = false)
         val entries = read.entries.values.mapNotNull { runCatching { coreCbor.decodeFromByteArray(ProfileEntry.serializer(), it) }.getOrNull() }
         val remoteName = entries.mapNotNull { it.name }.maxByOrNull { it.changed }
         val remoteImage = entries.mapNotNull { it.image }.maxByOrNull { it.changed }
@@ -6543,11 +6660,12 @@ class AnmpCore(
         val imageHashThere = remoteImage?.hash?.let(B64::encode)
         var takeImage = remoteImage?.takeIf { it.changed >= p.imageTs && imageHashThere != p.imageHash }
         var imageBytes: ByteArray? = null
+        var complete = true
         if (takeImage?.id != null) {
             val sealed = (transport.readContent(sp.space, ID(takeImage.id!!)) as? ReadResult.Found)?.fetched?.data
             imageBytes = sealed?.let { AnmpBlob.open(takeImage!!.key!!, takeImage!!.id!!, it) }?.takeIf { plainHash(it).contentEquals(takeImage!!.hash!!) }
             // The picture can be listed before its content is readable on the relay we asked: try again shortly.
-            if (imageBytes == null) { takeImage = null; profileIncomplete = true } else platform.blobs.write(OWN_IMAGE_SEALED, sealed!!)
+            if (imageBytes == null) { takeImage = null; complete = false } else platform.blobs.write(OWN_IMAGE_SEALED, sealed!!)
         }
         val known = p.settings.associateBy { it.name }
         val takeSettings = remoteSettings.filter { (k, v) -> known[k].let { it == null || (v.changed >= it.ts && B64.encode(v.data) != it.value) } }
@@ -6574,19 +6692,21 @@ class AnmpCore(
             (q.name.isNotBlank() && (remoteName == null || q.nameTs > remoteName.changed)) ||
             ((q.imageHash != null || q.imageTs > 0) && (remoteImage == null || q.imageTs > remoteImage.changed)) ||
             q.settings.any { st -> remoteSettings[st.name].let { it == null || st.ts > it.changed } }
-        if (!needWrite) return@onCore false
+        if (!needWrite) return@onCore ProfileWrite(answered = true, complete = complete)
         val image = ownImageForProfile(remoteImage)
         val entry = ProfileEntry(
             name = q.name.takeIf { it.isNotBlank() }?.let { ProfileValue(q.nameTs, it.encodeToByteArray()) },
             image = image?.first,
             settings = q.settings.associate { it.name to ProfileValue(it.ts, B64.decode(it.value)) },
         )
-        sp.put(coreCbor.encodeToByteArray(ProfileEntry.serializer(), entry), contents = listOfNotNull(image?.second))
-        if (read.entries.isNotEmpty()) sp.delete(read.entries.keys)
-        // A replaced picture does not stay as an orphan.
-        entries.mapNotNull { it.image?.id }.map(B64::encode).distinct().filter { old -> image?.first?.id?.let(B64::encode) != old }
-            .forEach { old -> transport.delete(sp.accessOf().cred, sp.space, ID.parse(old), entry = false) }
-        true
+        val stored = sp.replace(coreCbor.encodeToByteArray(ProfileEntry.serializer(), entry), read.entries.keys, contents = listOfNotNull(image?.second))
+        // A replaced picture does not stay as an orphan; like the old entries only once the new one is there, so that
+        // a device reading the old entry meanwhile still finds its picture.
+        val orphans = entries.mapNotNull { it.image?.id }.map(B64::encode).distinct().filter { old -> image?.first?.id?.let(B64::encode) != old }
+        if (orphans.isNotEmpty()) {
+            transport.afterStored(stored) { orphans.forEach { old -> transport.delete(sp.accessOf().cred, sp.space, ID.parse(old), entry = false) } }
+        }
+        ProfileWrite(answered = true, stored = stored, complete = complete)
     }
 
     // --- Device space: settings of each own device, by device ID (ADR 0106) ---------------------------------
@@ -6645,8 +6765,7 @@ class AnmpCore(
         }.keys
         if (stale.isNotEmpty()) sp.delete(stale)
         if (same || current.isEmpty()) return@onCore false
-        sp.put(coreCbor.encodeToByteArray(DeviceEntry.serializer(), DeviceEntry(mine, now(), current)))
-        if (own.isNotEmpty()) sp.delete(own.keys)
+        sp.replace(coreCbor.encodeToByteArray(DeviceEntry.serializer(), DeviceEntry(mine, now(), current)), own.keys)
         true
     }
 
@@ -6859,8 +6978,10 @@ class AnmpCore(
         /** Topic of the hint to the own other devices that the profile changed (ADR 0050). */
         const val PROFILE_TOPIC = "anmp/profile"
 
-        /** How often [profileSyncUntilComplete] tries, with growing pauses from [CoreTimings.backoffMin]. */
+        /** How often [profileLoop] tries, with growing pauses from [CoreTimings.backoffMin]. */
         private const val PROFILE_SYNC_TRIES = 5
+        /** How long a profile sync waits for its write (and the last one) before it goes on anyway (offline). */
+        val PROFILE_STORE_WAIT = 30.seconds
         private const val MAX_SEEN = 5_000
 
         /** Object IDs the notification extension already reported, so another holder does not report them again. */
@@ -6975,6 +7096,7 @@ class AnmpCore(
         private const val GRANT_BACKDATE = 60L
 
         /** Purposes of our mailbox grants for channels (ADR 0062 §11): in the links of an own channel, and back to the owner of a subscribed one. */
+        private const val CIRCLE_PURPOSE = "circle:"
         private const val JOIN_PURPOSE = "channel-join:"
         private const val SUBSCRIBED_PURPOSE = "channel:"
 

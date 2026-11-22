@@ -221,6 +221,16 @@ internal class FakeRelay(val node: SigningKey, val relay: Relay) {
     /** Simulated outage: every request fails like a broken connection. */
     var offline = false
 
+    /** Held writes: a PUT for which this returns `true` waits until [releasePuts] (a slow upload, a stuck relay). */
+    var holdPut: ((space: Key, size: Int) -> Boolean)? = null
+    private val putsReleased = MutableStateFlow(0)
+
+    /** Lets every held PUT go on. */
+    fun releasePuts() {
+        holdPut = null
+        putsReleased.value++
+    }
+
     /** Announced in /andp/v1/info. */
     var policy = Policy.DEFAULT
 
@@ -363,6 +373,10 @@ internal class FakeRelay(val node: SigningKey, val relay: Relay) {
                     m.verify(if (m.isEntry) isRevoked else null)
                 } catch (e: AndpException) {
                     return fail(403, "forbidden")
+                }
+                if (holdPut?.invoke(space, body.size) == true) {
+                    val epoch = putsReleased.value
+                    putsReleased.first { it != epoch }
                 }
                 // Extension not_before (ANDP §19): kept back until its time; a relay without it ignores the header.
                 val header = r.headers[AndpHeaders.NOT_BEFORE]

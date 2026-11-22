@@ -126,6 +126,20 @@ class CircleFlowTest {
     }
 
     @Test
+    fun attachmentOfAHistoryMessageCanBeLoaded() = world {
+        val a = device("Anna")
+        val circle = a.core.createCircle("Familie")
+        val bytes = ByteArray(5000) { 3 }
+        keep(a, circle.id, a.core.sendCircle(circle.id, "mit Anhang", listOf(a.core.prepareAttachment(bytes, "pdf", "brief.pdf"))))
+        // Ben joins later: the message comes with the history, its attachment lies in the circle space.
+        val b = device("Ben")
+        b.core.joinCircle(a.core.inviteLink(circle.id)!!)
+        b.await<CoreEvent.HistoryLoaded>()
+        val msg = b.all<CoreEvent.Message>().first { it.history && it.text == "mit Anhang" }
+        assertContentEquals(bytes, assertIs<BlobResult.Found>(b.core.fetchAttachment(msg.space, msg.attachments.single())).plaintext)
+    }
+
+    @Test
     fun removeMemberChangesKeyAndRevokesCircleGrant() = world {
         val a = device("Anna")
         val b = device("Ben")

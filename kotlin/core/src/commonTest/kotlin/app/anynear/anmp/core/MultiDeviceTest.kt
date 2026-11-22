@@ -1,5 +1,6 @@
 package app.anynear.anmp.core
 
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -7,6 +8,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 
 /** Several devices of one person (ADR 0042): one mailbox, direct messages to all devices, copies and snapshots. */
 class MultiDeviceTest {
@@ -147,6 +149,8 @@ class MultiDeviceTest {
         eventually { phone.core.canWriteTo(ben.deviceId) && ben.core.canWriteTo(phone.deviceId) }
         val circle = phone.core.createCircle("Familie")
         assertIs<JoinResult.Joined>(ben.core.joinCircle(phone.core.inviteLink(circle.id)!!))
+        // The key change goes to the members the phone knows; Ben is one only once his announcement has arrived.
+        eventually { phone.core.membersOf(circle.id).any { it.deviceId == ben.deviceId } }
         val stolen = addTablet(phone, "Tablet")
         val laptop = addTablet(phone, "Laptop")
         eventually { ben.core.membersOf(MemberState.CONTACTS).count { it.person == phone.info.personId } == 3 }
@@ -181,6 +185,25 @@ class MultiDeviceTest {
         again.stop()
     }
 
+    @Test
+    fun aContactKnownByItsChainCanWriteAfterAKeyChange() = world {
+        val phone = device("Anna")
+        val ben = device("Ben")
+        assertIs<AddContactResult.Added>(agreeContact(ben.core, phone.core))
+        eventually { phone.core.canWriteTo(ben.deviceId) && ben.core.canWriteTo(phone.deviceId) }
+        // Ben's chain is known: the profile with the picture goes to his mailbox recipient, its grant under that purpose.
+        eventually { phone.core.membersOf(MemberState.CONTACTS).any { it.person == ben.info.personId } }
+        phone.core.setOwnImage(ByteArray(100) { 1 })
+        eventually { ben.core.membersOf(MemberState.CONTACTS).any { it.deviceId == phone.deviceId && it.image != null } }
+
+        assertTrue(phone.core.renewPersonKey(emptyList()))
+        val newInbox = phone.core.identity.value!!.inbox
+        // The grant for the old mailbox is not handed out again: Ben gets one for the new mailbox and can write there.
+        eventually { ben.core.canWriteTo(phone.info.personId) && ben.core.membersOf(MemberState.CONTACTS).any { it.person == phone.info.personId && it.inbox == newInbox } }
+        val out = assertNotNull(ben.core.sendDirect(phone.info.personId, "Neuer Schlüssel?"))
+        phone.await<CoreEvent.Message> { it.mid == out.mid }
+    }
+
     /**
      * Two devices stolen at once (ADR 0042 §6): neither gets the new circle key; the store secret is
      * new on every remaining device, files and passwords move over and the old spaces are emptied, so the thieves read
@@ -192,6 +215,7 @@ class MultiDeviceTest {
         val ben = device("Ben")
         val circle = phone.core.createCircle("Familie")
         assertIs<JoinResult.Joined>(ben.core.joinCircle(phone.core.inviteLink(circle.id)!!))
+        eventually { phone.core.membersOf(circle.id).any { it.deviceId == ben.deviceId } }
         val tablet = addTablet(phone, "Tablet")
         val laptop = addTablet(phone, "Laptop")
         val watch = addTablet(phone, "Watch")
@@ -424,6 +448,42 @@ class MultiDeviceTest {
         phone.core.setOwnImage(null)
         val generated = tablet.await<CoreEvent.ProfileChanged>(kotlin.time.Duration.parse("30s")) { it.imageChanged && it.image == null }
         assertEquals(null, generated.image)
+    }
+
+    @Test
+    fun aProfileChangeWithoutRelaysGoesOutOnceTheyAnswer() = world {
+        val phone = device("Anna")
+        val tablet = addTablet(phone)
+        eventually { tablet.core.ownDevices.value.size == 2 }
+        // Renamed while no relay answers (offline, or right after the start without a network list): it used to stay
+        // on the phone until the next change.
+        net.relays.forEach { it.offline = true }
+        phone.core.setProfile("Anna B.", renamed = true)
+        delay(1.seconds)
+        net.relays.forEach { it.offline = false }
+        tablet.await<CoreEvent.ProfileChanged>(30.seconds) { it.name == "Anna B." }
+    }
+
+    @Test
+    fun theOldProfileStaysUntilTheNewOneIsStored() = world {
+        val phone = device("Anna")
+        val tablet = addTablet(phone)
+        eventually { tablet.core.ownDevices.value.size == 2 }
+        phone.core.setProfile("Anna B.", renamed = true)
+        tablet.await<CoreEvent.ProfileChanged>(30.seconds) { it.name != null }
+        eventually { !phone.core.profileSync() && !tablet.core.profileSync() }
+        // The picture upload hangs at every relay; the entry waits for it.
+        val picture = ByteArray(200_000) { (it % 13).toByte() }
+        net.relays.forEach { r -> r.holdPut = { _, size -> size > 100_000 } }
+        phone.core.setOwnImage(picture)
+        delay(1.seconds)
+        // Meanwhile the old entry is still there: the tablet finds one entry with nothing new and writes nothing (it
+        // used to find the space emptied and write its own, older profile), and is not told before the write is done.
+        assertFalse(tablet.core.profileSync())
+        assertTrue(tablet.none<CoreEvent.ProfileChanged>(1.seconds) { it.imageChanged })
+        net.relays.forEach { it.releasePuts() }
+        val pic = tablet.await<CoreEvent.ProfileChanged>(30.seconds) { it.imageChanged }
+        assertTrue(pic.image!!.contentEquals(picture))
     }
 
     @Test

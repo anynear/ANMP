@@ -274,10 +274,14 @@ internal class RelayPool(private val platform: AnmpPlatform) {
         val cached = lock.withLock { infos[relay.node] }
         if (cached != null && platform.clock.nowMillis() - cached.at < maxAgeMillis) return cached.info
         val c = client(relay) ?: return cached?.info
+        val asked = platform.clock.nowMillis()
         val info = runCatching { c.info() }.getOrNull() ?: return cached?.info
-        c.maxObjectBytes = info.policy.maxObjectBytes
         lock.withLock {
-            infos[relay.node] = CachedInfo(relay, info, platform.clock.nowMillis())
+            // An answer to an older request that comes in late does not replace a newer one (e.g. clients.min).
+            val newer = infos[relay.node]?.takeIf { it.at > asked }
+            if (newer != null) return newer.info
+            c.maxObjectBytes = info.policy.maxObjectBytes
+            infos[relay.node] = CachedInfo(relay, info, asked)
             _minClientLevel.value = infos.values.maxOf { it.info.minClientLevel }
         }
         return info

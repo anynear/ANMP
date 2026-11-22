@@ -253,6 +253,7 @@ class VectorsTest {
                 hex("contentDirectPlace", Anmp.encodeContent(AnmpContent(id = Fixtures.messageId, ts = ts, text = "Bin gleich da", place = AnmpPlace(AnmpPlace.EXACT, AnmpPosition(501106, 86821, ts, 9)))))
                 hex("contentMetaPlaces", Anmp.encodeContent(AnmpContent(ts = ts, meta = AnmpMeta("Familie", 1_800_000_000_000L, ByteArray(16) { 1 }, null, 0, ByteArray(0), listOf(AnmpCirclePlace(ByteArray(8) { 7 }, "Zu Hause", 501106, 86821, 150)), 1_800_000_000_500L, ByteArray(16) { 1 }))))
                 hex("contentSosAsk", Anmp.encodeContent(AnmpContent(id = Fixtures.messageId, ts = ts, sos = AnmpSos(Fixtures.messageId, AnmpSos.ASK))))
+                hex("contentSosReady", Anmp.encodeContent(AnmpContent(id = Fixtures.messageId, ts = ts, sos = AnmpSos(Fixtures.messageId, AnmpSos.READY, precise = false))))
                 hex("contentPositionAsk", Anmp.encodeContent(AnmpContent(ts = ts, place = AnmpPlace(AnmpPlace.OFF, ask = true))))
             }
             putJsonObject("packets") {

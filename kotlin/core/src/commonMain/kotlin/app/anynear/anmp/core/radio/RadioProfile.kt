@@ -295,25 +295,27 @@ object DeviceName {
     private val LEGACY_PREFIXES = listOf("anynear.app ", "anynear ", "PYRSA ", "PINA ")
     private val ALL_PREFIXES = listOf(PREFIX) + LEGACY_PREFIXES
 
-    /** Meshtastic allows 39 bytes for the long name. */
-    private const val LONG_NAME_MAX_BYTES = 39
+    /**
+     * Longest long name the firmware keeps. Up to 2.7 Meshtastic allowed 39 bytes; since 2.8 (commit `c2bcec93d`,
+     * "Fix long name clamping") it stores and resends at most 24 bytes and cuts longer names when saving. The app
+     * writes at most 24 bytes for every firmware, so a name stays the same when the radio is updated later.
+     */
+    const val LONG_NAME_MAX_BYTES = 24
     const val SUFFIX_MAX_BYTES = LONG_NAME_MAX_BYTES - PREFIX.length
 
-    /** Words for the name suggestion. Never change the order: otherwise a device gets a different suggestion. */
+    /**
+     * Words for the name suggestion, each at most 5 bytes so that word, space and the four digits of the node ID fit
+     * into [SUFFIX_MAX_BYTES] (10). Only append, never reorder: the position decides which device gets which word.
+     * Changed on 16.11.2026 for the 24-byte limit; names already on a radio stay, only new suggestions differ.
+     */
     private val WORDS = listOf(
-        "Ahorn", "Akelei", "Alpaka", "Amsel", "Anemone", "Apfel", "Aster", "Auerhahn", "Bach", "Baumfalke",
-        "Beere", "Biber", "Birke", "Birne", "Blaumeise", "Buche", "Buchfink", "Bussard", "Dachs", "Distel",
-        "Dohle", "Drossel", "Eiche", "Eichel", "Eisvogel", "Elch", "Elster", "Enzian", "Erle", "Esche",
-        "Eule", "Falke", "Farn", "Fasan", "Feldhase", "Felsen", "Fichte", "Fink", "Fischotter", "Fjord",
-        "Flieder", "Forelle", "Fuchs", "Gams", "Gecko", "Gimpel", "Ginster", "Habicht", "Hafer", "Hagebutte",
-        "Hase", "Haselnuss", "Heide", "Hirsch", "Holunder", "Hummel", "Igel", "Iltis", "Iris", "Kamille",
-        "Kastanie", "Kauz", "Kiebitz", "Kiefer", "Kirsche", "Kleiber", "Klee", "Kolibri", "Kormoran",
-        "Kranich", "Krokus", "Kuckuck", "Lachs", "Lavendel", "Lerche", "Libelle", "Linde", "Lotus", "Luchs",
-        "Lupine", "Marder", "Margerite", "Meise", "Milan", "Mispel", "Mohn", "Moos", "Narzisse", "Nelke",
-        "Otter", "Pappel", "Pfau", "Pinie", "Quelle", "Rabe", "Reh", "Reiher", "Rose", "Rotkehlchen",
-        "Salbei", "Schwalbe", "Schwan", "Seeadler", "Segler", "Sperber", "Specht", "Star", "Steinbock",
-        "Stieglitz", "Storch", "Tanne", "Taube", "Teich", "Thymian", "Tulpe", "Uhu", "Ulme", "Veilchen",
-        "Wacholder", "Waldkauz", "Walnuss", "Weide", "Wiesel", "Wildgans", "Zeisig", "Zeder", "Zypresse",
+        "Ahorn", "Amsel", "Apfel", "Aster", "Bach", "Beere", "Biber", "Birke", "Birne", "Buche",
+        "Dachs", "Dohle", "Eiche", "Elch", "Erle", "Esche", "Eule", "Falke", "Farn", "Fasan",
+        "Fink", "Fjord", "Fuchs", "Gams", "Gecko", "Hafer", "Hase", "Heide", "Igel", "Iltis",
+        "Iris", "Kauz", "Klee", "Lachs", "Linde", "Lotus", "Luchs", "Meise", "Milan", "Mohn",
+        "Moos", "Nelke", "Otter", "Pfau", "Pinie", "Rabe", "Reh", "Rose", "Star", "Tanne",
+        "Taube", "Teich", "Tulpe", "Uhu", "Ulme", "Weide", "Zeder", "Adler", "Wolf", "Lilie",
+        "Ente", "Gans", "Hecht", "Robbe", "Eibe", "Wels", "Unke",
     )
 
     /** Name of the app, with current or former prefix. */
@@ -327,8 +329,8 @@ object DeviceName {
 
     /**
      * Own part of an existing name (also with an older prefix), otherwise `null`.
-     * `anynear.app | ` is longer than the old prefixes; an old, fully used part is therefore shortened to
-     * [SUFFIX_MAX_BYTES].
+     * `anynear.app | ` is longer than the old prefixes and the long name has only 24 bytes since firmware 2.8; a longer
+     * part is therefore shortened to [SUFFIX_MAX_BYTES].
      */
     fun suffixOf(longName: String?): String? {
         val prefix = prefixOf(longName) ?: return null
@@ -387,6 +389,35 @@ object DeviceName {
     }
 
     fun longName(suffix: String): String = PREFIX + normalize(suffix)
+
+    /**
+     * [longName] as the firmware stores it: since 2.8 cut to [LONG_NAME_MAX_BYTES] bytes, the bytes of a character
+     * cut apart each replaced by `?` (`clampLongName`/`sanitizeUtf8` in meshtastic/firmware). Unchanged when it fits.
+     */
+    fun clamped(longName: String): String {
+        val bytes = longName.encodeToByteArray()
+        if (bytes.size <= LONG_NAME_MAX_BYTES) return longName
+        val cut = bytes.copyOf(LONG_NAME_MAX_BYTES)
+        // Start of the last character: step back over continuation bytes (10xxxxxx).
+        var start = cut.size - 1
+        while (start > 0 && (cut[start].toInt() and 0xC0) == 0x80) start--
+        val lead = cut[start].toInt() and 0xFF
+        val length = when {
+            lead < 0x80 -> 1
+            lead and 0xE0 == 0xC0 -> 2
+            lead and 0xF0 == 0xE0 -> 3
+            else -> 4
+        }
+        if (start + length <= cut.size) return cut.decodeToString()
+        return cut.copyOf(start).decodeToString() + "?".repeat(cut.size - start)
+    }
+
+    /**
+     * Does the radio carry [expected]? Firmware 2.8 shortens names over [LONG_NAME_MAX_BYTES] bytes when saving
+     * (see [clamped]); such a name counts as written, otherwise the setup would wait for it forever.
+     */
+    fun isStored(stored: String?, expected: String): Boolean =
+        stored != null && (stored == expected || stored == clamped(expected))
 
     /**
      * Short name (Meshtastic allows 4 characters): `A` plus three characters from the last four digits

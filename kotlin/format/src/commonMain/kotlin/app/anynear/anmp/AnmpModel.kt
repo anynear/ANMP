@@ -400,10 +400,13 @@ class AnmpSos(
     @CborLabel(4) val trail: List<AnmpPosition>? = null,
     @CborLabel(5) val start: Long? = null,
     @CborLabel(6) val plan: ByteArray? = null,
+    /** [READY] only: whether a call of the sender carries its precise place (ADR 0125 §8). */
+    @CborLabel(7) val precise: Boolean? = null,
 ) {
     val plausible: Boolean
-        get() = id.size == 8 && state in RAISED..DROPPED && (battery == null || battery in 0..100) &&
-            (trail == null || trail.size <= MAX_TRAIL) && (start == null || start > 0) && (plan == null || plan.size == 8)
+        get() = id.size == 8 && state in RAISED..READY && (battery == null || battery in 0..100) &&
+            (trail == null || trail.size <= MAX_TRAIL) && (start == null || start > 0) && (plan == null || plan.size == 8) &&
+            (state == READY) == (precise != null)
 
     companion object {
         const val RAISED = 1
@@ -421,6 +424,12 @@ class AnmpSos(
 
         /** The asker no longer counts the reader as its contact for calls (ADR 0123 §3); sent to the reader alone. */
         const val DROPPED = 7
+
+        /**
+         * The asker tells a contact whether its calls carry its precise place (field 7, ADR 0125 §8), so that nobody
+         * relies on a place that will not come; sent to the contact alone, after its yes and whenever it changes.
+         */
+        const val READY = 8
         const val MAX_TRAIL = 10
 
         /**

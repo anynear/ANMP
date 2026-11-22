@@ -230,6 +230,11 @@ internal data class CoreState(
     val sosContacts: List<SosContact> = emptyList(),
     val sosAsks: List<SosAsk> = emptyList(),
     val sosAgreed: List<String> = emptyList(),
+    /** Whether calls of the persons we said yes to carry their precise place, as each said last (ADR 0125 §8). */
+    val sosReady: List<SosReady> = emptyList(),
+    /** Whether the own calls carry the precise place, as this device knows it, and what each contact was told. */
+    val sosPreciseOwn: Boolean? = null,
+    val sosPreciseTold: Map<String, Boolean> = emptyMap(),
     /** „Standort freigeben“ (ADR 0123 §2), one entry per person, from the cards in the direct messages. */
     val sharings: List<PlaceSharing> = emptyList(),
     /** Persons whose mailbox refuses us (every holder 403), with since when (ms): person ID → time (ADR 0046). */

@@ -157,6 +157,10 @@ data class PlaceSharing(
     }
 }
 
+/** What [person], whose contact for calls we are, said last about its calls carrying its precise place (ADR 0125 §8); [at] ms. */
+@Serializable
+internal data class SosReady(val person: String, val precise: Boolean, val at: Long)
+
 /** A person asks us to be its contact for calls, not answered yet; [circleId] if it asked a whole circle. */
 @JsExport
 @Serializable

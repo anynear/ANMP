@@ -118,4 +118,17 @@ jobs:
           java-version: "21"
       - uses: gradle/actions/setup-gradle@v5
       - name: Compile iOS
-        run: ./gradlew :format:compileKotlinIosArm64 :format:compileKotlinIosX64 :core:compileKotlinIosArm64 :core:compileKotlinIosX64 :format:iosSimulatorArm64Test :core:iosSimulatorArm64Test --console=plain
+        run: ./gradlew :format:compileKotlinIosArm64 :format:compileKotlinIosX64 :core:compileKotlinIosArm64 :core:compileKotlinIosX64 :format:linkDebugTestIosSimulatorArm64 :core:linkDebugTestIosSimulatorArm64 --console=plain
+      # On their own, so that the tests (real time, several cores in one process) do not share the three cores of the
+      # runner with the linker of the other module.
+      - name: iOS simulator tests
+        run: ./gradlew :format:iosSimulatorArm64Test :core:iosSimulatorArm64Test --console=plain --max-workers=1
+      - uses: actions/upload-artifact@v5
+        if: failure()
+        with:
+          name: test-reports-ios
+          path: |
+            ANMP/kotlin/format/build/reports/tests
+            ANMP/kotlin/core/build/reports/tests
+            ANMP/kotlin/format/build/test-results
+            ANMP/kotlin/core/build/test-results

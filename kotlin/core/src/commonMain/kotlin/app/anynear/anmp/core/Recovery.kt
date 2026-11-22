@@ -10,6 +10,8 @@ import app.anynear.anmp.AnmpEnvelope
 import app.anynear.anmp.AnmpKeys
 import app.anynear.anmp.AnmpSync
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.cbor.CborLabel
 import kotlin.js.JsExport
@@ -93,9 +95,24 @@ internal class SealedSpace private constructor(
 
     fun accessOf(): SpaceAccess = access
 
-    /** Queues [plaintext] as the new entry, with [contents] (ID, sealed bytes) it refers to. */
-    suspend fun put(plaintext: ByteArray, ref: String = "", contents: List<Pair<ID, ByteArray>> = emptyList()) {
-        transport.submit(space, aead.seal(plaintext, aad), until = 0, contents = contents, ref = ref, known = access)
+    /**
+     * Queues [plaintext] as the new entry, with [contents] (ID, sealed bytes) it refers to. The result completes with
+     * `true` once one holder stored the entry, `false` if none took it.
+     */
+    suspend fun put(plaintext: ByteArray, ref: String = "", contents: List<Pair<ID, ByteArray>> = emptyList()): Deferred<Boolean> {
+        val stored = CompletableDeferred<Boolean>()
+        transport.submit(space, aead.seal(plaintext, aad), until = 0, contents = contents, ref = ref, known = access, stored = stored)
+        return stored
+    }
+
+    /**
+     * [put], and deletes the entries [older] only once the new one is stored: a reader in between finds the old entry
+     * (or both, and takes the newest), never an empty space; a write no relay took loses nothing. The result completes
+     * once both are done (`false`: no relay took the new entry, the old ones stay).
+     */
+    suspend fun replace(plaintext: ByteArray, older: Collection<String>, contents: List<Pair<ID, ByteArray>> = emptyList()): Deferred<Boolean> {
+        val stored = put(plaintext, contents = contents)
+        return if (older.isEmpty()) stored else transport.afterStored(stored) { delete(older) }
     }
 
     /**

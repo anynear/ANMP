@@ -325,11 +325,24 @@ class AnmpCoreWeb private constructor(private val core: AnmpCore, private val ho
     /** The persons we said yes to: only their calls may ring loudly. */
     fun sosAgreed(): Array<String> = core.sosAgreed().toTypedArray()
 
+    /** Whether a call of [person], whose contact we are, carries its precise place (ADR 0125 §8); `null` if it never said. */
+    fun sosPreciseOf(person: String): Boolean? = core.sosPreciseOf(person)
+
     /** Whom the own person asked to be a contact for its calls, and what they answered. */
     fun sosContacts(): Array<SosContact> = core.sosContacts().toTypedArray()
 
     /** The own answer to [person]: [agree] or not, also to take a yes back; every own device learns it. */
     fun answerSosAsk(person: String, agree: Boolean): Promise<Boolean> = GlobalScope.promise { core.answerSosAsk(person, agree) }
+
+    /**
+     * Calls for help (ADR 0121 §14): the own one and those of persons we are a contact for, ended ones for a day.
+     * The browser never raises a call; it shows those of others with their exact place (22.11.2026). Changes come as
+     * [CoreEvent.SosChanged].
+     */
+    fun sosCalls(): Array<SosCall> = core.sosCalls().toTypedArray()
+
+    /** „Ich kümmere mich“ for the call [id] of someone else; every helper sees who looks after it. */
+    fun careSos(id: String): Promise<Boolean> = GlobalScope.promise { core.careSos(id) }
 
     /** Own and subscribed channels (ADR 0062). */
     fun channels(): Array<ChannelState> = core.channels.value.toTypedArray()

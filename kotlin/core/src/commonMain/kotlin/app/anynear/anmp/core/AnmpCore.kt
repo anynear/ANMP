@@ -398,7 +398,9 @@ class AnmpCore(
     // --- State ----------------------------------------------------------------------------------
 
     private fun loadState(): CoreState =
-        platform.secrets.get(STATE_KEY)?.let { runCatching { coreJson.decodeFromString(CoreState.serializer(), it.decodeToString()) }.getOrNull() } ?: CoreState()
+        platform.secrets.get(STATE_KEY)?.let { runCatching { coreJson.decodeFromString(CoreState.serializer(), it.decodeToString()) }.getOrNull() }
+            // Before anything hands out a grant at start: one revoked under another purpose is revoked (ANMP-Dev#193).
+            ?.let { it.copy(issued = it.issued.withSharedRevocations()) } ?: CoreState()
 
     private suspend fun update(change: (CoreState) -> CoreState): CoreState = stateLock.withLock {
         val prev = _state.value
@@ -2028,7 +2030,7 @@ class AnmpCore(
     private val REVOKED_LINK = "link-revoked:"
 
 
-    private fun contactPurpose(deviceId: String) = "contact:$deviceId"
+    private fun contactPurpose(deviceId: String) = "$CONTACT_PURPOSE$deviceId"
 
     private fun circlePurpose(circleId: String, epoch: Int) = "$CIRCLE_PURPOSE$circleId:$epoch"
 
@@ -2044,6 +2046,20 @@ class AnmpCore(
      */
     private fun IssuedGrant.forOwnInbox(): Boolean =
         purpose.startsWith(CIRCLE_PURPOSE) || runCatching { Grant.parse(grant).body.space == me.inbox }.getOrDefault(false)
+
+    /**
+     * Marks every entry revoked whose grant was revoked under another purpose. Before ANMP-Dev#193 one grant could stand
+     * under a circle purpose and a contact purpose at once; leaving or rekeying the circle revoked it on the relays but
+     * marked only the circle entry. The contact entry looked valid, was handed out again and never renewed (180 days),
+     * so the contact could not write to us, even after the update. Marked revoked, [maintenance] gives it a new grant.
+     */
+    private fun List<IssuedGrant>.withSharedRevocations(): List<IssuedGrant> {
+        val revoked = filter { it.revoked }.mapTo(HashSet()) { it.hash }
+        val shared = filter { !it.revoked && it.hash in revoked }
+        if (shared.isEmpty()) return this
+        log.log("grants revoked under another purpose: ${shared.joinToString { it.purpose.substringBefore(':') + " " + it.hash.take(8) }}")
+        return map { if (!it.revoked && it.hash in revoked) it.copy(revoked = true) else it }
+    }
 
     /** A grant for our mailbox for [purpose]; reused while more than [CoreTimings.grantRenewBefore] is left. */
     private suspend fun grantFor(purpose: String, grantee: Key?, lifetime: Duration = timings.grantLifetime, renewBefore: Duration = timings.grantRenewBefore): Grant {
@@ -2091,8 +2107,13 @@ class AnmpCore(
     private suspend fun revoke(prefix: String) {
         val due = state.issued.filter { it.purpose.startsWith(prefix) && !it.revoked && it.until > nowS() }
         if (due.isEmpty()) return
-        update { s -> s.copy(issued = s.issued.map { if (it in due) it.copy(revoked = true) else it }) }
-        for (g in due) {
+        // Revoked on the relays is the grant, not the purpose: an entry with the same hash under another purpose is
+        // revoked with it (one grant could stand under several purposes before ANMP-Dev#193).
+        val hashes = due.map { it.hash }.toSet()
+        val alsoContact = state.issued.any { it.hash in hashes && it !in due && it.purpose.startsWith(CONTACT_PURPOSE) }
+        update { s -> s.copy(issued = s.issued.map { if (it.hash in hashes) it.copy(revoked = true) else it }) }
+        if (alsoContact) cs.launch { renewContactGrants() }
+        for (g in due.distinctBy { it.hash }) {
             log.log("revoke grant ${g.purpose.substringBefore(':')} ${g.hash.take(8)}")
             val hash = app.anynear.andp.Hash.parse(g.hash)
             transport.submit(me.inbox, Meta.revocationData(hash), until = 0, revokes = hash.toString(), known = ownAccess())
@@ -5659,6 +5680,18 @@ class AnmpCore(
         }
     }
 
+    /**
+     * Contacts whose personal grant runs out or was revoked get a new one. Checked under the purpose the grant is issued
+     * for ([grantPurposeOf]: per mailbox recipient once the chain names one), once per purpose.
+     */
+    private suspend fun renewContactGrants() {
+        val now = nowS()
+        state.members.filter { it.circleId == MemberState.CONTACTS }.map { it.deviceId }.distinct()
+            .groupBy { grantPurposeOf(it) }
+            .filterKeys { p -> state.issued.none { it.purpose == p && !it.revoked && it.until - now > timings.grantRenewBefore.inWholeSeconds && it.forOwnInbox() } }
+            .values.forEach { runCatching { sendProfileTo(it.first()) } }
+    }
+
     // --- Maintenance ---------------------------------------------------------------------------
 
     /** Purges removed circles after their grace period; renews grants before they expire. */
@@ -5667,12 +5700,8 @@ class AnmpCore(
         while (true) {
             val t = now()
             state.circles.filter { it.removed && it.graceUntil < t }.forEach { dropCircle(it.id) }
-            update { s -> s.copy(grants = s.grants.filter { it.until > t / 1000 }, issued = s.issued.filter { it.until > t / 1000 }) }
-            // Contacts whose personal grant runs out get a new one.
-            val renew = state.members.filter { it.circleId == MemberState.CONTACTS }.map { it.deviceId }.distinct().filter { d ->
-                state.issued.none { it.purpose == contactPurpose(d) && !it.revoked && it.until - t / 1000 > timings.grantRenewBefore.inWholeSeconds && it.forOwnInbox() }
-            }
-            renew.forEach { runCatching { sendProfileTo(it) } }
+            update { s -> s.copy(grants = s.grants.filter { it.until > t / 1000 }, issued = s.issued.filter { it.until > t / 1000 }.withSharedRevocations()) }
+            renewContactGrants()
             expireRequests()
             if (state.storeCleanups.isNotEmpty()) cs.launch { cleanUpStores() }
             delay(timings.purgeCheck)
@@ -7097,6 +7126,7 @@ class AnmpCore(
 
         /** Purposes of our mailbox grants for channels (ADR 0062 §11): in the links of an own channel, and back to the owner of a subscribed one. */
         private const val CIRCLE_PURPOSE = "circle:"
+        private const val CONTACT_PURPOSE = "contact:"
         private const val JOIN_PURPOSE = "channel-join:"
         private const val SUBSCRIBED_PURPOSE = "channel:"
 

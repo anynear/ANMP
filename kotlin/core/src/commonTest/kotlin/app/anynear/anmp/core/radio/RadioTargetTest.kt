@@ -64,7 +64,7 @@ class RadioTargetTest {
     fun otherDeviationsStillAsk() {
         val own = snapshot(RadioProfile.lora(null).newBuilder().also { it.modem_preset = Config.LoRaConfig.ModemPreset.MEDIUM_FAST }.build())
         assertFalse(RadioProfile.isAreaChange(own, RadioProfile.deviations(own, europe), known), "preset no area uses")
-        val hops = snapshot(RadioProfile.lora(null).newBuilder().also { it.hop_limit = 3 }.build())
+        val hops = snapshot(RadioProfile.lora(null).newBuilder().also { it.hop_limit = 5 }.build())
         assertFalse(RadioProfile.isAreaChange(hops, RadioProfile.deviations(hops, europe), known), "another deviation")
         val foreign = snapshot(RadioProfile.lora(null), name = "Meshtastic 1234")
         assertFalse(RadioProfile.isAreaChange(foreign, RadioProfile.deviations(foreign, europe) - ProfileDeviation.NAME, known), "not set up for the app")

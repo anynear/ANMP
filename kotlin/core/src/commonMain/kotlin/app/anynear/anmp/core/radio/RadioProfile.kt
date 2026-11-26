@@ -16,8 +16,11 @@ import kotlin.math.abs
 object Hessenmesh {
     const val FREQUENCY_MHZ = 869.525f
 
-    /** Deliberately 5 instead of 3: with 3 hops messages did not arrive in the field test (ADR 0006). */
-    const val HOP_LIMIT = 5
+    /**
+     * The Meshtastic default (ADR 0127, replaces the 5 of ADR 0006): every extra hop makes more radios relay every
+     * packet on the shared channel. Own messages go further only as a retry ([app.anynear.anmp.core.RadioHops]).
+     */
+    const val HOP_LIMIT = 3
 
     /** Name of the public channel of the Meshhessen community (ADR 0055); its key is in the app. */
     const val MESH_HESSEN_CHANNEL = "Mesh Hessen"

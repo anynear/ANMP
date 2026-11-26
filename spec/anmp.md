@@ -1095,8 +1095,9 @@ device or circle. It reports what arrives as events (message over radio, reactio
 
 **Radio queue.** Own messages for the radio wait in a queue of the core, kept in the app's store (`core.radio.queue`)
 over restarts, one entry per message and target device or circle. The packet is built when it goes out, with the tags
-of that hour. Delivery plan (ADR 0087, 0090): first try (online after 30 s), after 60 s without receipt once more with 7
-hops (kept in the store), then the entry waits. It goes again only (a) after a trigger: a packet heard from a radio of
+of that hour. Delivery plan (ADR 0087, 0090): first try with 3 hops, the Meshtastic default (online after 30 s), then after
+each 60 s without receipt once more one step up, with 5 and then 7 hops (ADR 0127; the step reached is kept in the
+store per target), then the entry waits. It goes again only (a) after a trigger: a packet heard from a radio of
 the target (node numbers from field 10), or an answered radio check, after a random wait (20–60 s if the target's app
 was heard or the check answered, 60–180 s if only its radio), at most 4 times, at the earliest 10 min, 30 min, 2 h, 6 h
 after the last radio send, with the measured hops + 1; or (b) on the off chance, at most twice, 2 h and 12 h after the

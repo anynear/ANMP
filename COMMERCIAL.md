@@ -10,5 +10,11 @@ the rights to the code (contributions are covered by the [Contributor License Ag
 
 Contact: [business@anynear.app](mailto:business@anynear.app)
 
+**Not covered: the Meshtastic layer.** The Meshtastic® protobuf definitions are licensed under GPL-3.0 by Meshtastic
+LLC. Code that implements this schema or is generated from it stays under the GPL only, and a commercial licence from
+us cannot extend to it. In this repository that is the Meshtastic protobufs library and the code that uses it
+(`kotlin/core/src/*/kotlin/app/anynear/anmp/core/radio/` and `…/core/firmware/`). For closed-source use of that part,
+ask Meshtastic LLC, which plans to offer its own commercial licence.
+
 A commercial licence covers the code of this repository only. It grants no rights to the name “anynear” or its logos
 and no access to the anynear network or other anynear services; these need a separate agreement.

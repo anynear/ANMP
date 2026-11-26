@@ -394,7 +394,7 @@ class RadioWayTest {
     }
 
     @Test
-    fun withoutReceiptOnceMoreWithSevenHopsAndRememberIt() = world {
+    fun withoutReceiptInStepsOfThreeFiveSevenAndRememberIt() = world {
         val a = device("Anna")
         val circle = a.core.createCircle("Familie")
         val air = FakeAir()
@@ -404,14 +404,14 @@ class RadioWayTest {
         // Hop limits of the sends of [mid], in order (asks for a patron go out too and do not count).
         fun hopsOf(mid: String) = a.all<CoreEvent.RadioSend>().filter { it.mid == mid && it.state == RadioSendState.QUEUED }.map { air.hopsOf[it.packetId] }
         val first = newMid()
-        // Without internet at once, with 5 hops; no receipt → once more with 7, then nothing more.
+        // Without internet at once, with 3 hops (ADR 0127); no receipt → 5, then 7, then nothing more.
         a.core.queueRadioText(circle.id, null, first, 1_700_000_000_000, "Hallo?")
-        eventually { hopsOf(first).size >= 2 }
-        assertEquals(listOf(RadioHops.FIRST, RadioHops.MAX), hopsOf(first).take(2))
-        // 5 was not enough: 7 is kept for this circle at once, even without a receipt for the second try (a member
-        // that is never reachable must not make every message go twice).
+        eventually { hopsOf(first).size >= 3 }
+        assertEquals(listOf(3, 5, 7), hopsOf(first).take(3))
+        // 5 was not enough: 7 is kept for this circle at once, even without a receipt for the last try (a member
+        // that is never reachable must not make every message go three times).
         eventually { a.store.getString(RadioHops.KEY).orEmpty().contains(""""hops":7""") }
-        assertTrue(a.none<CoreEvent.RadioSend>(500.milliseconds) { it.mid == first && hopsOf(first).size > 2 }, "no third try")
+        assertTrue(a.none<CoreEvent.RadioSend>(500.milliseconds) { it.mid == first && hopsOf(first).size > 3 }, "no fourth try")
 
         val next = newMid()
         a.core.queueRadioText(circle.id, null, next, 1_700_000_002_000, "Noch da?")
@@ -583,12 +583,12 @@ class RadioWayTest {
         b.start(rb, FakeRadioHost(online = false), retryTimings)
         b.core.setProfile("Ben", node = rb.node.toLong())
 
-        // Ben's phone is away from his radio: both tries go nowhere, then the message waits.
+        // Ben's phone is away from his radio: all three tries (3, 5, 7 hops) go nowhere, then the message waits.
         rb.ready.value = false
         val mid = newMid()
         a.core.queueRadioText(null, b.deviceId, mid, 1_700_000_000_000, "Bist du da?")
-        eventually { a.all<CoreEvent.RadioSend>().count { it.mid == mid && it.state == RadioSendState.QUEUED } == 2 }
-        assertTrue(a.none<CoreEvent.RadioSend>(800.milliseconds) { a.all<CoreEvent.RadioSend>().count { r -> r.mid == mid && r.state == RadioSendState.QUEUED } > 2 }, "no retry without a trigger")
+        eventually { a.all<CoreEvent.RadioSend>().count { it.mid == mid && it.state == RadioSendState.QUEUED } == 3 }
+        assertTrue(a.none<CoreEvent.RadioSend>(800.milliseconds) { a.all<CoreEvent.RadioSend>().count { r -> r.mid == mid && r.state == RadioSendState.QUEUED } > 3 }, "no retry without a trigger")
 
         // Ben is back and sends something: Anna learns his radio (field 10) and hears his app, then sends again.
         rb.ready.value = true
@@ -619,18 +619,18 @@ class RadioWayTest {
         val mid = newMid()
         a.core.queueRadioText(null, b.deviceId, mid, 1_700_000_000_000, "Hallo")
         fun sends() = a.all<CoreEvent.RadioSend>().count { it.mid == mid && it.state == RadioSendState.QUEUED }
-        eventually { sends() == 2 }
+        eventually { sends() == 3 }
         delay(400.milliseconds)
         // An answered radio check of Ben's radio: one retry.
         a.core.radioHeard(4242)
-        eventually { sends() == 3 }
+        eventually { sends() == 4 }
         // Heard again at once: the next gap (an hour here) is not over, nothing goes.
         delay(400.milliseconds)
         ra.heardFlow.emit(RadioHeard(4242, hops = 1))
-        assertTrue(a.none<CoreEvent.RadioSend>(800.milliseconds) { sends() > 3 })
+        assertTrue(a.none<CoreEvent.RadioSend>(800.milliseconds) { sends() > 4 })
         // A radio of someone else does not count either.
         a.core.radioHeard(777)
-        assertTrue(a.none<CoreEvent.RadioSend>(500.milliseconds) { sends() > 3 })
+        assertTrue(a.none<CoreEvent.RadioSend>(500.milliseconds) { sends() > 4 })
     }
 
     @Test
@@ -659,10 +659,10 @@ class RadioWayTest {
         fun hopsOf(mid: String) = a.all<CoreEvent.RadioSend>().filter { it.mid == mid && it.state == RadioSendState.QUEUED }.map { air.hopsOf[it.packetId] }
         val mid = newMid()
         a.core.queueRadioText(circle.id, null, mid, 1_700_000_000_000, "Hört mich wer?")
-        // 5, 7 (ADR 0087), then twice on the off chance with 7 (ADR 0090), then nothing.
-        eventually { hopsOf(mid).size >= 4 }
-        assertEquals(listOf(RadioHops.FIRST, RadioHops.MAX, RadioHops.MAX, RadioHops.MAX), hopsOf(mid).take(4))
-        assertTrue(a.none<CoreEvent.RadioSend>(1.seconds) { hopsOf(mid).size > 4 }, "at most two tries on the off chance")
+        // 3, 5, 7 (ADR 0087, 0127), then twice on the off chance with 7 (ADR 0090), then nothing.
+        eventually { hopsOf(mid).size >= 5 }
+        assertEquals(listOf(3, 5, 7, RadioHops.MAX, RadioHops.MAX), hopsOf(mid).take(5))
+        assertTrue(a.none<CoreEvent.RadioSend>(1.seconds) { hopsOf(mid).size > 5 }, "at most two tries on the off chance")
         // It still waits for a trigger (up to 7 days), stored.
         assertTrue(a.store.getString(RadioQueue.KEY).orEmpty().contains(""""blindRetries":2"""))
     }

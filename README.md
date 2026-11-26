@@ -20,7 +20,7 @@ example, it has no forward secrecy) is in the section "Security considerations" 
 part of this repository.
 
 Contributing: `CONTRIBUTING.md`. Vulnerabilities: `SECURITY.md`, not a public issue. License: GPL-3.0-or-later
-(see `LICENSE` and `NOTICE`); a commercial licence is available (`COMMERCIAL.md`).
+(see `LICENSE` and `NOTICE`); a commercial licence is available (`COMMERCIAL.md`), except for the Meshtastic® layer, which stays GPL-only.
 
 ## Modules
 

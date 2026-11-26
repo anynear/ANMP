@@ -105,7 +105,8 @@ interface RadioHost {
 /** Times of the patron exchange (ADR 0051); shorter in tests. */
 class RadioTimings(
     val offlineBeforeAsk: Duration = 5.minutes,
-    val askEvery: Duration = 15.minutes,
+    /** At most hourly, like the Meshtastic defaults for automatic transmissions (ADR 0127). */
+    val askEvery: Duration = 60.minutes,
     val askAnswerWait: Duration = 60.seconds,
     val patronage: Duration = 60.minutes,
     val pollEvery: Duration = 30.seconds,
@@ -117,7 +118,7 @@ class RadioTimings(
     val trackSends: Duration = 2.minutes,
     /** Online, an own message waits this long for its receipt over the internet before it goes over radio. */
     val internetFirst: Duration = 30.seconds,
-    /** Without a receipt this long after a radio send, it goes once more with [RadioHops.MAX]. */
+    /** Without a receipt this long after a radio send, it goes once more one step up in [RadioHops.STEPS]. */
     val hopRetry: Duration = 60.seconds,
     /** How long the hop limit that worked is kept per target. */
     val hopMemory: Duration = 7.days,

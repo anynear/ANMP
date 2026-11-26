@@ -215,8 +215,8 @@ class RadioRelayTest {
         assertEquals(1, env.pickupsFor.size, "only the first patron gets the keys")
         assertTrue(env.pickupsFor.single().contentEquals(first))
         assertTrue(relay.servedByPatron.value)
-        advanceTimeBy(10.minutes)
-        assertEquals(3, asks().size, "with an answer again only after 15 minutes")
+        advanceTimeBy(55.minutes)
+        assertEquals(3, asks().size, "with an answer again only after an hour (ADR 0127)")
         advanceTimeBy(5.minutes)
         assertEquals(listOf<Int?>(1, 2, 3, 1), asks().take(4))
     }

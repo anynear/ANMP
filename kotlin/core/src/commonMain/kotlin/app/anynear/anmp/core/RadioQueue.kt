@@ -38,7 +38,7 @@ internal data class RadioQueued(
     val hops: Int? = null,
     /** When it was queued first (Unix ms, ADR 0090: lives at most [RadioTimings.retryMaxAge]); 0 = not yet known. */
     val since: Long = 0,
-    /** The next send is the second try with [RadioHops.MAX] (ADR 0087); [firstHops] was the limit of the first. */
+    /** The next send is a further try one step up in [RadioHops.STEPS] (ADR 0087); [firstHops] was the limit of the last one. */
     val escalate: Boolean = false,
     val firstHops: Int? = null,
     /** Both tries are out: waits for a trigger (ADR 0090), not for the clock. */
@@ -57,8 +57,8 @@ internal data class RadioQueued(
 }
 
 /**
- * Hop limits per target (ADR 0087): two tries, [FIRST] and then [MAX]; the one that worked is kept for a while, so
- * the next message to the same person or circle starts there instead of going out twice.
+ * Hop limits per target (ADR 0087, ADR 0127): tries in [STEPS], 3 (the Meshtastic default), then 5, then 7; the one that
+ * worked is kept for a while, so the next message to the same person or circle starts there instead of going out again.
  */
 internal class RadioHops(private val store: KeyValueStore, private val now: () -> Long, private val keep: Long) {
     @Serializable
@@ -80,8 +80,13 @@ internal class RadioHops(private val store: KeyValueStore, private val now: () -
     }
 
     companion object {
-        const val FIRST = 5
-        const val MAX = 7
+        /** Hop limits of the tries one after the other (ADR 0127): the first one is the Meshtastic default. */
+        val STEPS = listOf(3, 5, 7)
+        val FIRST = STEPS.first()
+        val MAX = STEPS.last()
+
+        /** Hop limit of the try after one with [hops]: the next step, at most [MAX]. */
+        fun after(hops: Int): Int = STEPS.firstOrNull { it > hops } ?: MAX
 
         /** Name in the app's store (ADR 0034 §5). */
         const val KEY = "core.radio.hops"
@@ -95,7 +100,7 @@ internal enum class HeardBy { APP, RADIO, CHECK }
 
 /**
  * Queue of own messages for the radio (ADR 0057 step 5, ADR 0087, ADR 0090), kept over restarts in the store of the
- * app. A message goes out once, after [RadioTimings.hopRetry] without receipt once more with [RadioHops.MAX], and then
+ * app. A message goes out once, after each [RadioTimings.hopRetry] without receipt once more one step up in [RadioHops.STEPS], and then
  * waits for a trigger: a packet heard from a radio of the target or an answered radio check. Then it goes again after a
  * random wait, within the limits of [RadioTimings] (gaps, per message, per day, maximum age). It is dropped as soon as
  * it is no longer wanted ([RadioHost.stillWanted]). A send the radio provably never took (never
@@ -271,7 +276,7 @@ internal class RadioQueue(
         lock.withLock {
             val t = now()
             val gone = queue.filter { expired(it, t) || !host.stillWanted(it.mid) || exhausted(it) }
-            // A receipt came before the second try: the first hop limit was enough for this target.
+            // A receipt came before the next try: the last hop limit was enough for this target.
             gone.filter { it.escalate && !host.stillWanted(it.mid) }.forEach { e -> e.firstHops?.let { hops.worked(RadioHops.targetOf(e), it) } }
             queue.removeAll { it in gone }
             val due = queue.filter { e -> blindDue(e)?.let { it <= t } == true }.sortedBy { it.since }
@@ -305,16 +310,17 @@ internal class RadioQueue(
             }
             val target = RadioHops.targetOf(next)
             if (!host.stillWanted(next.mid) || expired(next, t)) {
-                // A receipt came in time: the first hop limit was enough for this target.
+                // A receipt came in time: the last hop limit was enough for this target.
                 if (next.escalate) next.firstHops?.let { hops.worked(target, it) }
                 remove(next)
                 continue
             }
             if (next.escalate) {
-                log("radio queue: ${next.mid.take(6)} no receipt, again with ${RadioHops.MAX} hops")
-                // 5 was not enough: the next message to this target starts with 7 at once, whatever this try brings. A
-                // circle with a member that is never reachable would otherwise send every message twice.
-                hops.worked(target, RadioHops.MAX)
+                val up = next.hops ?: RadioHops.MAX
+                log("radio queue: ${next.mid.take(6)} no receipt, again with $up hops")
+                // The lower limit was not enough: the next message to this target starts here at once, whatever this try
+                // brings. A circle with a member that is never reachable would otherwise send every message three times.
+                hops.worked(target, up)
             }
             val bytes = packet(next)
             if (bytes == null) {
@@ -329,10 +335,10 @@ internal class RadioQueue(
             } catch (e: Exception) {
                 null
             } ?: return // Not possible right now; again when the radio is back.
-            val after = if (next.retry || next.escalate || hopLimit >= RadioHops.MAX) {
+            val after = if (next.retry || hopLimit >= RadioHops.MAX) {
                 next.copy(waiting = true, lastSent = t, escalate = false, retry = false, hops = null, notBefore = 0)
             } else {
-                next.copy(escalate = true, firstHops = hopLimit, hops = RadioHops.MAX, notBefore = t + timings.hopRetry.inWholeMilliseconds, lastSent = t)
+                next.copy(escalate = true, firstHops = hopLimit, hops = RadioHops.after(hopLimit), notBefore = t + timings.hopRetry.inWholeMilliseconds, lastSent = t)
             }
             lock.withLock {
                 replace(next.key) { after }
@@ -343,7 +349,7 @@ internal class RadioQueue(
                 "radio queue: ${next.mid.take(6)} sent to ${RadioHops.targetOf(next).take(8)} with $hopLimit hops, packet ${sent.packetId}" +
                     when {
                         next.retry -> ", retry"
-                        next.escalate -> ", second try"
+                        next.escalate -> ", try with more hops"
                         else -> ""
                     },
             )
